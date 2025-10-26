@@ -170,6 +170,13 @@ class SO101Follower(Robot):
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 0)
 
+                if motor == "gripper":
+                    self.bus.write(
+                        "Max_Torque_Limit", motor, 500
+                    )  # 50% of the max torque limit to avoid burnout
+                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+
     def setup_motors(self) -> None:
         expected_ids = [1]
         # Check if there are other motors on the bus
