@@ -756,9 +756,9 @@ class MotorsBus(abc.ABC):
 
             if display_values:
                 print("\n-------------------------------------------")
-                print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
+                print(f"{'NAME':<23} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
                 for motor in motors:
-                    print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
+                    print(f"{motor:<23} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
 
             if enter_pressed():
                 user_pressed_enter = True
