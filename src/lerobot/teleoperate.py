@@ -196,7 +196,7 @@ def teleop_loop(
         dt_s = time.perf_counter() - loop_start
         busy_wait(1 / fps - dt_s)
         loop_s = time.perf_counter() - loop_start
-        print(f"\ntime: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+        print(f"\rtime: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)", end="", flush=True)
 
         if duration is not None and time.perf_counter() - start >= duration:
             return
