@@ -71,3 +71,72 @@ class OpenCVCameraConfig(CameraConfig):
             raise ValueError(
                 f"`rotation` is expected to be in {(Cv2Rotation.NO_ROTATION, Cv2Rotation.ROTATE_90, Cv2Rotation.ROTATE_180, Cv2Rotation.ROTATE_270)}, but {self.rotation} is provided."
             )
+
+
+@CameraConfig.register_subclass("cvt_opencv")
+@dataclass
+class CvtOpenCVCameraConfig(OpenCVCameraConfig):
+    """Configuration class for OpenCV camera with resolution and frame rate conversion.
+    
+    This extends OpenCVCameraConfig to add flexible resolution and frame rate conversion.
+    The camera will capture at in_width*in_height@in_fps and convert to width*height@fps.
+    
+    Attributes:
+        in_fps: Input frame rate (must match fps for now)
+        in_width: Input frame width
+        in_height: Input frame height
+        index_or_path: Either an integer representing the camera device index,
+                      or a Path object pointing to a video file.
+        color_mode: Color mode for image output (RGB or BGR). Defaults to RGB.
+        rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
+        warmup_s: Time reading frames before returning from connect (in seconds)
+        fps: Output frame rate (must match in_fps for now)
+        width: Output frame width
+        height: Output frame height
+        
+    Example:
+        ```python
+        # Camera with resolution conversion: 1280x1024@30fps -> 640x360@30fps
+        config = CvtOpenCVCameraConfig(
+            in_fps=30,
+            in_width=1280,
+            in_height=1024,
+            index_or_path=0,
+            fps=30,
+            width=640,
+            height=360,
+            color_mode=ColorMode.RGB,
+            rotation=Cv2Rotation.NO_ROTATION,
+            warmup_s=1,
+        )
+        ```
+    """
+
+    in_fps: int | None = None
+    in_width: int | None = None
+    in_height: int | None = None
+    
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        super().__post_init__()
+        
+        # Check if input parameters are provided
+        if self.in_fps is None or self.in_width is None or self.in_height is None:
+            raise ValueError(
+                "Input parameters (in_fps, in_width, in_height) are required for CvtOpenCVCameraConfig"
+            )
+        
+        # Validate frame rate consistency
+        if self.in_fps != self.fps:
+            raise ValueError(
+                f"Input fps ({self.in_fps}) must match output fps ({self.fps}). "
+                "Frame rate conversion is not yet supported."
+            )
+        
+        # Validate input dimensions
+        if self.in_width <= 0 or self.in_height <= 0:
+            raise ValueError(f"Input dimensions must be positive, got {self.in_width}x{self.in_height}")
+        
+        # Validate output dimensions
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError(f"Output dimensions must be positive, got {self.width}x{self.height}")

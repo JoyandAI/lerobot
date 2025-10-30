@@ -13,4 +13,5 @@
 # limitations under the License.
 
 from .camera_opencv import OpenCVCamera
-from .configuration_opencv import OpenCVCameraConfig
+from .camera_cvt_opencv import CvtOpenCVCamera
+from .configuration_opencv import OpenCVCameraConfig, CvtOpenCVCameraConfig
