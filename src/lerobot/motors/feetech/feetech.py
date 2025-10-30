@@ -300,7 +300,7 @@ class FeetechMotorsBus(MotorsBus):
             
             # calculate target offset
             target_offset = pos - int(max_res / 2)
-            print(f"target_offset: {target_offset}")
+            # print(f"target_offset: {target_offset}")
             
             # get Homing_Offset bits from encoding table
             encoding_table = self.model_encoding_table.get(model, {})
@@ -316,7 +316,7 @@ class FeetechMotorsBus(MotorsBus):
                 target_offset -= adjustment_value
             while target_offset < -max_offset:
                 target_offset += adjustment_value
-            print(f"target_offset adjusted: {target_offset}")
+            # print(f"target_offset adjusted: {target_offset}")
             
             half_turn_homings[motor] = target_offset
 
