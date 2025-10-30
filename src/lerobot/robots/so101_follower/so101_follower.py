@@ -135,7 +135,7 @@ class SO101Follower(Robot):
 
         if 'gripper' in range_mins:
             # add negative offset to gripper to enable just-tight follower grip when leader gripper is closed
-            gripper_adjust_offset_deg = 4
+            gripper_adjust_offset_deg = 3.5
             encoding_table = self.bus.model_encoding_table.get(self.bus.motors['gripper'].model, {})
             homing_offset_bits = encoding_table.get("Homing_Offset")
             full_range = 1 << (homing_offset_bits + 1)
