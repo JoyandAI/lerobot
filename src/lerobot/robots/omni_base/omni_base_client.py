@@ -110,7 +110,7 @@ class OmniBaseClient(Robot):
 
         if self._is_connected:
             raise DeviceAlreadyConnectedError(
-                "LeKiwi Daemon is already connected. Do not run `robot.connect()` twice."
+                "OmniBase Daemon is already connected. Do not run `robot.connect()` twice."
             )
 
         zmq = self._zmq
@@ -129,7 +129,7 @@ class OmniBaseClient(Robot):
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
         socks = dict(poller.poll(self.connect_timeout_s * 1000))
         if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
-            raise DeviceNotConnectedError("Timeout waiting for LeKiwi Host to connect expired.")
+            raise DeviceNotConnectedError("Timeout waiting for OmniBase Host to connect expired.")
 
         self._is_connected = True
 
@@ -252,7 +252,7 @@ class OmniBaseClient(Robot):
         and a camera frame. Receives over ZMQ, translate to body-frame vel
         """
         if not self._is_connected:
-            raise DeviceNotConnectedError("LeKiwiClient is not connected. You need to run `robot.connect()`.")
+            raise DeviceNotConnectedError("OmniBaseClient is not connected. You need to run `robot.connect()`.")
 
         frames, obs_dict = self._get_data()
 
@@ -301,7 +301,7 @@ class OmniBaseClient(Robot):
         pass
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Command lekiwi to move to a target joint configuration. Translates to motor space + sends over ZMQ
+        """Command omni_base to move to a target joint configuration. Translates to motor space + sends over ZMQ
 
         Args:
             action (np.ndarray): array containing the goal positions for the motors.
@@ -331,7 +331,7 @@ class OmniBaseClient(Robot):
 
         if not self._is_connected:
             raise DeviceNotConnectedError(
-                "LeKiwi is not connected. You need to run `robot.connect()` before disconnecting."
+                "OmniBase is not connected. You need to run `robot.connect()` before disconnecting."
             )
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
