@@ -6,7 +6,7 @@
 
 <div align="center">
 
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/nighty.yml?query=branch%3Amain)
+[![Tests](https://github.com/huggingface/lerobot/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/nightly.yml?query=branch%3Amain)
 [![Python versions](https://img.shields.io/pypi/pyversions/lerobot)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/huggingface/lerobot/blob/main/LICENSE)
 [![Status](https://img.shields.io/pypi/status/lerobot)](https://pypi.org/project/lerobot/)
@@ -227,7 +227,7 @@ Our script can also visualize datasets stored on a distant server. See `python -
 
 A dataset in `LeRobotDataset` format is very simple to use. It can be loaded from a repository on the Hugging Face hub or a local folder simply with e.g. `dataset = LeRobotDataset("lerobot/aloha_static_coffee")` and can be indexed into like any Hugging Face and PyTorch dataset. For instance `dataset[0]` will retrieve a single temporal frame from the dataset containing observation(s) and an action as PyTorch tensors ready to be fed to a model.
 
-A specificity of `LeRobotDataset` is that, rather than retrieving a single frame by its index, we can retrieve several frames based on their temporal relationship with the indexed frame, by setting `delta_timestamps` to a list of relative times with respect to the indexed frame. For example, with `delta_timestamps = {"observation.image": [-1, -0.5, -0.2, 0]}` one can retrieve, for a given index, 4 frames: 3 "previous" frames 1 second, 0.5 seconds, and 0.2 seconds before the indexed frame, and the indexed frame itself (corresponding to the 0 entry). See example [1_load_lerobot_dataset.py](https://github.com/huggingface/lerobot/blob/main/examples/1_load_lerobot_dataset.py) for more details on `delta_timestamps`.
+A specificity of `LeRobotDataset` is that, rather than retrieving a single frame by its index, we can retrieve several frames based on their temporal relationship with the indexed frame, by setting `delta_timestamps` to a list of relative times with respect to the indexed frame. For example, with `delta_timestamps = {"observation.image": [-1, -0.5, -0.2, 0]}` one can retrieve, for a given index, 4 frames: 3 "previous" frames 1 second, 0.5 seconds, and 0.2 seconds before the indexed frame, and the indexed frame itself (corresponding to the 0 entry). See example [1_load_lerobot_dataset.py](https://github.com/huggingface/lerobot/blob/main/examples/dataset/load_lerobot_dataset.py) for more details on `delta_timestamps`.
 
 Under the hood, the `LeRobotDataset` format makes use of several ways to serialize data which can be useful to understand if you plan to work more closely with this format. We tried to make a flexible yet simple dataset format that would cover most type of features and specificities present in reinforcement learning and robotics, in simulation and in real-world, with a focus on cameras and robot states but easily extended to other types of sensory inputs as long as they can be represented by a tensor.
 
@@ -246,19 +246,29 @@ dataset attributes:
   │  ├ timestamp (float32): timestamp in the episode
   │  ├ next.done (bool): indicates the end of an episode ; True for the last frame in each episode
   │  └ index (int64): general index in the whole dataset
-  ├ episode_data_index: contains 2 tensors with the start and end indices of each episode
-  │  ├ from (1D int64 tensor): first frame index for each episode — shape (num episodes,) starts with 0
-  │  └ to: (1D int64 tensor): last frame index for each episode — shape (num episodes,)
-  ├ stats: a dictionary of statistics (max, mean, min, std) for each feature in the dataset, for instance
-  │  ├ observation.images.cam_high: {'max': tensor with same number of dimensions (e.g. `(c, 1, 1)` for images, `(c,)` for states), etc.}
-  │  ...
-  ├ info: a dictionary of metadata on the dataset
-  │  ├ codebase_version (str): this is to keep track of the codebase version the dataset was created with
-  │  ├ fps (float): frame per second the dataset is recorded/synchronized to
-  │  ├ video (bool): indicates if frames are encoded in mp4 video files to save space or stored as png files
-  │  └ encoding (dict): if video, this documents the main options that were used with ffmpeg to encode the videos
-  ├ videos_dir (Path): where the mp4 videos or png images are stored/accessed
-  └ camera_keys (list of string): the keys to access camera features in the item returned by the dataset (e.g. `["observation.images.cam_high", ...]`)
+  ├ meta: a LeRobotDatasetMetadata object containing:
+  │  ├ info: a dictionary of metadata on the dataset
+  │  │  ├ codebase_version (str): this is to keep track of the codebase version the dataset was created with
+  │  │  ├ fps (int): frame per second the dataset is recorded/synchronized to
+  │  │  ├ features (dict): all features contained in the dataset with their shapes and types
+  │  │  ├ total_episodes (int): total number of episodes in the dataset
+  │  │  ├ total_frames (int): total number of frames in the dataset
+  │  │  ├ robot_type (str): robot type used for recording
+  │  │  ├ data_path (str): formattable string for the parquet files
+  │  │  └ video_path (str): formattable string for the video files (if using videos)
+  │  ├ episodes: a DataFrame containing episode metadata with columns:
+  │  │  ├ episode_index (int): index of the episode
+  │  │  ├ tasks (list): list of tasks for this episode
+  │  │  ├ length (int): number of frames in this episode
+  │  │  ├ dataset_from_index (int): start index of this episode in the dataset
+  │  │  └ dataset_to_index (int): end index of this episode in the dataset
+  │  ├ stats: a dictionary of statistics (max, mean, min, std) for each feature in the dataset, for instance
+  │  │  ├ observation.images.front_cam: {'max': tensor with same number of dimensions (e.g. `(c, 1, 1)` for images, `(c,)` for states), etc.}
+  │  │  └ ...
+  │  └ tasks: a DataFrame containing task information with task names as index and task_index as values
+  ├ root (Path): local directory where the dataset is stored
+  ├ image_transforms (Callable): optional image transformations to apply to visual modalities
+  └ delta_timestamps (dict): optional delta timestamps for temporal queries
 ```
 
 A `LeRobotDataset` is serialised using several widespread file formats for each of its parts, namely:
@@ -269,49 +279,13 @@ A `LeRobotDataset` is serialised using several widespread file formats for each 
 
 Dataset can be uploaded/downloaded from the HuggingFace hub seamlessly. To work on a local dataset, you can specify its location with the `root` argument if it's not in the default `~/.cache/huggingface/lerobot` location.
 
-### Evaluate a pretrained policy
-
-Check out [example 2](https://github.com/huggingface/lerobot/blob/main/examples/2_evaluate_pretrained_policy.py) that illustrates how to download a pretrained policy from Hugging Face hub, and run an evaluation on its corresponding environment.
-
-We also provide a more capable script to parallelize the evaluation over multiple environments during the same rollout. Here is an example with a pretrained model hosted on [lerobot/diffusion_pusht](https://huggingface.co/lerobot/diffusion_pusht):
-
-```bash
-python -m lerobot.scripts.eval \
-    --policy.path=lerobot/diffusion_pusht \
-    --env.type=pusht \
-    --eval.batch_size=10 \
-    --eval.n_episodes=10 \
-    --policy.use_amp=false \
-    --policy.device=cuda
-```
-
-Note: After training your own policy, you can re-evaluate the checkpoints with:
-
-```bash
-python -m lerobot.scripts.eval --policy.path={OUTPUT_DIR}/checkpoints/last/pretrained_model
-```
-
-See `python -m lerobot.scripts.eval --help` for more instructions.
-
-### Train your own policy
-
-Check out [example 3](https://github.com/huggingface/lerobot/blob/main/examples/3_train_policy.py) that illustrates how to train a model using our core library in python, and [example 4](https://github.com/huggingface/lerobot/blob/main/examples/4_train_policy_with_script.md) that shows how to use our training script from command line.
-
-To use wandb for logging training and evaluation curves, make sure you've run `wandb login` as a one-time setup step. Then, when running the training command above, enable WandB in the configuration by adding `--wandb.enable=true`.
-
-A link to the wandb logs for the run will also show up in yellow in your terminal. Here is an example of what they look like in your browser. Please also check [here](https://github.com/huggingface/lerobot/blob/main/examples/4_train_policy_with_script.md#typical-logs-and-metrics) for the explanation of some commonly used metrics in logs.
-
-\<img src="https://raw.githubusercontent.com/huggingface/lerobot/main/media/wandb.png" alt="WandB logs example"\>
-
-Note: For efficiency, during training every checkpoint is evaluated on a low number of episodes. You may use `--eval.n_episodes=500` to evaluate on more episodes than the default. Or, after training, you may want to re-evaluate your best checkpoints on more episodes or change the evaluation settings. See `python -m lerobot.scripts.eval --help` for more instructions.
-
 #### Reproduce state-of-the-art (SOTA)
 
 We provide some pretrained policies on our [hub page](https://huggingface.co/lerobot) that can achieve state-of-the-art performances.
 You can reproduce their training by loading the config from their run. Simply running:
 
 ```bash
-python -m lerobot.scripts.train --config_path=lerobot/diffusion_pusht
+lerobot-train --config_path=lerobot/diffusion_pusht
 ```
 
 reproduces SOTA results for Diffusion Policy on the PushT task.
@@ -363,3 +337,7 @@ If you want, you can cite this work with:
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=huggingface/lerobot&type=Timeline)](https://star-history.com/#huggingface/lerobot&Timeline)
+
+```
+
+```

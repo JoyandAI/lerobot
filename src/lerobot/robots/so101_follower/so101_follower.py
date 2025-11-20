@@ -135,7 +135,7 @@ class SO101Follower(Robot):
 
         if 'gripper' in range_mins:
             # add negative offset to gripper to enable just-tight follower grip when leader gripper is closed
-            gripper_adjust_offset_deg = 4
+            gripper_adjust_offset_deg = 3.5
             encoding_table = self.bus.model_encoding_table.get(self.bus.motors['gripper'].model, {})
             homing_offset_bits = encoding_table.get("Homing_Offset")
             full_range = 1 << (homing_offset_bits + 1)
@@ -169,6 +169,13 @@ class SO101Follower(Robot):
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 0)
+
+                if motor == "gripper":
+                    self.bus.write(
+                        "Max_Torque_Limit", motor, 500
+                    )  # 50% of the max torque limit to avoid burnout
+                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
+                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
     def setup_motors(self) -> None:
         expected_ids = [1]
