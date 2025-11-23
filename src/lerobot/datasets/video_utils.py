@@ -446,14 +446,31 @@ def concatenate_video_files(
     stream_map = {}
     for input_stream in input_container.streams:
         if input_stream.type in ("video", "audio", "subtitle"):  # only copy compatible streams
-            stream_map[input_stream.index] = output_container.add_stream_from_template(
+            output_stream = output_container.add_stream_from_template(
                 template=input_stream, opaque=True
             )
-            stream_map[
-                input_stream.index
-            ].time_base = (
-                input_stream.time_base
-            )  # set the time base to the input stream time base (missing in the codec context)
+            stream_map[input_stream.index] = output_stream
+            # Set the time base to the input stream time base (missing in the codec context)
+            # For stream copy mode, we need to ensure time_base is set correctly
+            # However, if the stream is configured as a decoder (which can happen in some cases),
+            # we cannot set time_base directly. In stream copy mode, time_base will be
+            # inherited from input packets during muxing, so it's safe to skip if setting fails.
+            try:
+                # Try to set time_base directly on the stream
+                # This works when the stream is configured as an encoder (normal case)
+                output_stream.time_base = input_stream.time_base
+            except RuntimeError as e:
+                # If the stream is configured as a decoder, we cannot set time_base
+                # This can happen in edge cases, but for stream copy mode it's okay
+                # because time_base will be inherited from input packets during muxing
+                if "decoder" in str(e).lower():
+                    logging.debug(
+                        f"Stream {input_stream.index} ({input_stream.type}) is configured as decoder. "
+                        f"time_base will be inherited from input packets during muxing."
+                    )
+                else:
+                    # Re-raise if it's a different error
+                    raise
 
     # Demux + remux packets (no re-encode)
     for packet in input_container.demux():
