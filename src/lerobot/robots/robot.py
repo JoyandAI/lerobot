@@ -52,6 +52,7 @@ class Robot(abc.ABC):
         self.calibration_dir.mkdir(parents=True, exist_ok=True)
         self.calibration_fpath = self.calibration_dir / f"{self.id}.json"
         self.calibration: dict[str, MotorCalibration] = {}
+        print("Try to load calibration params from: ", self.calibration_fpath)
         if self.calibration_fpath.is_file():
             self._load_calibration()
 

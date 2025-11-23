@@ -249,10 +249,29 @@ class FeetechMotorsBus(MotorsBus):
                 print("Calibration ranges mismatch!")
             return same_ranges
 
-        same_offsets = all(
-            self.calibration[motor].homing_offset == cal.homing_offset
-            for motor, cal in motors_calibration.items()
-        )
+        # Check homing_offset only for motors that are NOT in continuous rotation mode (VELOCITY mode)
+        # For continuous rotation motors like base wheels, homing_offset is not meaningful
+        same_offsets = True
+        for motor, cal in motors_calibration.items():
+            try:
+                # Read the Operating_Mode to check if motor is in continuous rotation mode
+                operating_mode = self.read("Operating_Mode", motor, normalize=False)
+                # Skip homing_offset check for VELOCITY mode (continuous rotation)
+                if operating_mode == OperatingMode.VELOCITY.value:
+                    continue
+                # For non-velocity mode motors, check homing_offset
+                if self.calibration[motor].homing_offset != cal.homing_offset:
+                    same_offsets = False
+                    print(f"Calibration offset mismatch for {motor} (not in continuous rotation mode)!")
+                    print(f"  Expected: {self.calibration[motor].homing_offset}, Got: {cal.homing_offset}")
+            except Exception as e:
+                # If we can't read Operating_Mode, fall back to checking homing_offset
+                # This maintains backward compatibility
+                logger.warning(f"Could not read Operating_Mode for {motor}: {e}. Checking homing_offset anyway.")
+                if self.calibration[motor].homing_offset != cal.homing_offset:
+                    same_offsets = False
+                    print(f"motor: {motor}, self.calibration[motor].homing_offset: {self.calibration[motor].homing_offset}, cal.homing_offset: {cal.homing_offset}")
+        
         if not same_offsets:
             print("Calibration offsets mismatch!")
         return same_ranges and same_offsets
