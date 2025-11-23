@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import time
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any
 
 from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
@@ -146,6 +146,15 @@ class KeyboardTeleop(Teleoperator):
             )
         if self.listener is not None:
             self.listener.stop()
+        # Clear keyboard state to prevent lingering key presses from being processed
+        self.current_pressed.clear()
+        # Drain any remaining events from the queue to prevent them from being processed later
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+            except Empty:
+                # Queue is empty, break to avoid infinite loop
+                break
 
 
 class KeyboardEndEffectorTeleop(KeyboardTeleop):
