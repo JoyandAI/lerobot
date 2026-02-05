@@ -241,25 +241,28 @@ class OpenCVCamera(Camera):
             raise RuntimeError(f"{self} failed to set fps={self.fps} ({actual_fps=}).")
 
     def _validate_fourcc(self) -> None:
-        """Validates and sets the camera's FOURCC code."""
-
-        fourcc_code = cv2.VideoWriter_fourcc(*self.config.fourcc)
-
         if self.videocapture is None:
             raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
 
-        success = self.videocapture.set(cv2.CAP_PROP_FOURCC, fourcc_code)
-        actual_fourcc_code = self.videocapture.get(cv2.CAP_PROP_FOURCC)
+        # Windows: MJPG  YUY2
+        fourcc_candidates = ["MJPG", "YUY2"]
 
-        # Convert actual FOURCC code back to string for comparison
-        actual_fourcc_code_int = int(actual_fourcc_code)
-        actual_fourcc = "".join([chr((actual_fourcc_code_int >> 8 * i) & 0xFF) for i in range(4)])
+        for fourcc in fourcc_candidates:
+            fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
+            success = self.videocapture.set(cv2.CAP_PROP_FOURCC, fourcc_code)
 
-        if not success or actual_fourcc != self.config.fourcc:
-            logger.warning(
-                f"{self} failed to set fourcc={self.config.fourcc} (actual={actual_fourcc}, success={success}). "
-                f"Continuing with default format."
-            )
+            if success:
+                logger.info(f"{self} set FOURCC={fourcc}")
+                self.config.fourcc = fourcc
+                return
+
+            logger.warning(f"{self} failed to set FOURCC={fourcc}, trying next...")
+
+        logger.warning(
+            f"{self} failed to set any preferred FOURCC "
+            f"(tried {fourcc_candidates}), using backend default."
+        )
+
 
     def _validate_width_and_height(self) -> None:
         """Validates and sets the camera's frame capture width and height."""
@@ -475,7 +478,7 @@ class OpenCVCamera(Camera):
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
+    def async_read(self, timeout_ms: float = 1000) -> NDArray[Any]:
         """
         Reads the latest available frame asynchronously.
 
