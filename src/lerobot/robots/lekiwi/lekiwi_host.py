@@ -71,11 +71,12 @@ def main(cfg: LeKiwiServerConfig):
     last_cmd_time = time.time()
     watchdog_active = False
     logging.info("Waiting for commands...")
+    last_cmd_time = 0 #
     try:
         # Business logic
         start = time.perf_counter()
-        duration = 0
-        while duration < host.connection_time_s:
+        #duration = 0
+        while True : #duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
@@ -85,7 +86,9 @@ def main(cfg: LeKiwiServerConfig):
                 watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
-                    logging.warning("No command available")
+                    if time.time() - last_cmd_time > 5.0:
+                        logging.warning("No command available for 5s")
+                        last_cmd_time = time.time()
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
@@ -119,7 +122,7 @@ def main(cfg: LeKiwiServerConfig):
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
-            duration = time.perf_counter() - start
+            # duration = time.perf_counter() - start
         print("Cycle time reached.")
 
     except KeyboardInterrupt:

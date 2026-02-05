@@ -17,6 +17,7 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
@@ -26,17 +27,17 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
-NUM_EPISODES = 2
+NUM_EPISODES = 2000
 FPS = 30
-EPISODE_TIME_SEC = 60
+EPISODE_TIME_SEC = 120
 TASK_DESCRIPTION = "My task description"
-HF_MODEL_ID = "<hf_username>/<model_repo_id>"
-HF_DATASET_ID = "<hf_username>/<eval_dataset_repo_id>"
+HF_MODEL_ID = "outputs/pretrained_model"
+HF_DATASET_ID = "lekiwi_test/eval_lekiwi_catch_block_cameras_right"
 
 
 def main():
     # Create the robot configuration & robot
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="lekiwi")
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.200.66", id="R12254322")
 
     robot = LeKiwiClient(robot_config)
 

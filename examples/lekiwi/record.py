@@ -21,29 +21,35 @@ from lerobot.robots.lekiwi.config_lekiwi import LeKiwiClientConfig
 from lerobot.robots.lekiwi.lekiwi_client import LeKiwiClient
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
-from lerobot.teleoperators.so100_leader import SO100Leader, SO100LeaderConfig
+from lerobot.teleoperators.so101_leader import SO101Leader, SO101LeaderConfig
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
+import argparse
 
-NUM_EPISODES = 2
+NUM_EPISODES = 300
 FPS = 30
-EPISODE_TIME_SEC = 30
-RESET_TIME_SEC = 10
-TASK_DESCRIPTION = "My task description"
-HF_REPO_ID = "<hf_username>/<dataset_repo_id>"
+EPISODE_TIME_SEC = 3000
+RESET_TIME_SEC = 20
+TASK_DESCRIPTION = "catch the block"
+HF_REPO_ID = "lekiwi_test/catch_block"
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Record datasets for lekiwi robot")
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    resume = args.resume 
+
     # Create the robot and teleoperator configurations
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="lekiwi")
-    leader_arm_config = SO100LeaderConfig(port="/dev/tty.usbmodem585A0077581", id="my_awesome_leader_arm")
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.200.66", id="R12254322")
+    leader_arm_config = SO101LeaderConfig(port="COM4", id="R07254799")
     keyboard_config = KeyboardTeleopConfig()
 
     # Initialize the robot and teleoperator
     robot = LeKiwiClient(robot_config)
-    leader_arm = SO100Leader(leader_arm_config)
+    leader_arm = SO101Leader(leader_arm_config)
     keyboard = KeyboardTeleop(keyboard_config)
 
     # TODO(Steven): Update this example to use pipelines
@@ -53,16 +59,31 @@ def main():
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
     obs_features = hw_to_dataset_features(robot.observation_features, OBS_STR)
     dataset_features = {**action_features, **obs_features}
+    if resume:
+        dataset = LeRobotDataset(
+            repo_id=HF_REPO_ID,
+        )
 
-    # Create the dataset
-    dataset = LeRobotDataset.create(
-        repo_id=HF_REPO_ID,
-        fps=FPS,
-        features=dataset_features,
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
+        if hasattr(robot, "cameras") and len(robot.cameras) > 0:
+            dataset.start_image_writer(
+                num_processes=0,
+                num_threads=4 * len(robot.cameras),
+            )
+
+        recorded_episodes = dataset.num_episodes
+        print(f"[RESUME] Existing episodes: {recorded_episodes}")
+
+    else:
+        dataset = LeRobotDataset.create(
+            repo_id=HF_REPO_ID,
+            fps=FPS,
+            features=dataset_features,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=4,
+            batch_encoding_size=1,
+        )
+        recorded_episodes = 0
 
     # Connect the robot and teleoperator
     # To connect you already should have this script running on LeKiwi: `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_awesome_kiwi`
@@ -78,36 +99,18 @@ def main():
         raise ValueError("Robot or teleop is not connected!")
 
     print("Starting record loop...")
-    recorded_episodes = 0
-    while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
-        log_say(f"Recording episode {recorded_episodes}")
+    try:
+        while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
+            log_say(f"Recording episode {recorded_episodes}")
 
-        # Main record loop
-        record_loop(
-            robot=robot,
-            events=events,
-            fps=FPS,
-            dataset=dataset,
-            teleop=[leader_arm, keyboard],
-            control_time_s=EPISODE_TIME_SEC,
-            single_task=TASK_DESCRIPTION,
-            display_data=True,
-            teleop_action_processor=teleop_action_processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
-        )
-
-        # Reset the environment if not stopping or re-recording
-        if not events["stop_recording"] and (
-            (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
-        ):
-            log_say("Reset the environment")
+            # Main record loop
             record_loop(
                 robot=robot,
                 events=events,
                 fps=FPS,
+                dataset=dataset,
                 teleop=[leader_arm, keyboard],
-                control_time_s=RESET_TIME_SEC,
+                control_time_s=EPISODE_TIME_SEC,
                 single_task=TASK_DESCRIPTION,
                 display_data=True,
                 teleop_action_processor=teleop_action_processor,
@@ -115,26 +118,57 @@ def main():
                 robot_observation_processor=robot_observation_processor,
             )
 
-        if events["rerecord_episode"]:
-            log_say("Re-record episode")
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
+            # Reset the environment if not stopping or re-recording
+            if not events["stop_recording"] and (
+                (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
+            ):
+                log_say("Reset the environment")
+                record_loop(
+                    robot=robot,
+                    events=events,
+                    fps=FPS,
+                    teleop=[leader_arm, keyboard],
+                    control_time_s=RESET_TIME_SEC,
+                    single_task=TASK_DESCRIPTION,
+                    display_data=True,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_action_processor=robot_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                )
+            if dataset.episode_buffer is None or dataset.episode_buffer.get("size", 0) == 0:
+                print("[WARN] Episode buffer empty, skip save")
+                dataset.clear_episode_buffer()
+                continue
+
+            if events["rerecord_episode"]:
+                log_say("Re-record episode")
+                events["rerecord_episode"] = False
+                events["exit_early"] = False
+                dataset.clear_episode_buffer()
+                continue
+
+            # Save episode
+            dataset.save_episode()
+            recorded_episodes += 1
+            print(f"{recorded_episodes} is end ")
+    except KeyboardInterrupt :
+            print("[ERROR] Recording KeyboardInterrupt interrupted")
             dataset.clear_episode_buffer()
-            continue
+    except Exception as e:
+            print(f"[ERROR] Recording interrupted: {e}")
+            print("[INFO] Discarding current incomplete episode")
+            dataset.clear_episode_buffer()
+    finally:
+        print("[INFO] Finalizing dataset (saving metadata)...")
+        dataset.clear_episode_buffer(delete_images=True)
+        dataset.finalize()
+        # dataset.push_to_hub() 
+        log_say("Stop recording")
+        robot.disconnect()
+        leader_arm.disconnect()
+        keyboard.disconnect()
+        listener.stop()
 
-        # Save episode
-        dataset.save_episode()
-        recorded_episodes += 1
-
-    # Clean up
-    log_say("Stop recording")
-    robot.disconnect()
-    leader_arm.disconnect()
-    keyboard.disconnect()
-    listener.stop()
-
-    dataset.finalize()
-    dataset.push_to_hub()
 
 
 if __name__ == "__main__":
