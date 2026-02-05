@@ -100,6 +100,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so100_follower,
     so101_follower,
+    bi_so101_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -111,6 +112,8 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     so100_leader,
     so101_leader,
+    xlebi_so101_leader,
+    bi_so101_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
@@ -329,7 +332,9 @@ def record_loop(
 
         elif policy is None and isinstance(teleop, Teleoperator):
             act = teleop.get_action()
-
+            if not act:
+                time.sleep(0.01)
+                continue
             # Applies a pipeline to the raw teleop action, default is IdentityProcessor
             act_processed_teleop = teleop_action_processor((act, obs))
 
@@ -503,7 +508,6 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     events["exit_early"] = False
                     dataset.clear_episode_buffer()
                     continue
-
                 dataset.save_episode()
                 recorded_episodes += 1
     finally:
