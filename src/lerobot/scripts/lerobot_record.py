@@ -100,18 +100,22 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so100_follower,
     so101_follower,
+    xlerobot,
     bi_so101_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
     bi_so100_leader,
+    gamepad,
     homunculus,
+    keyboard,
     koch_leader,
     make_teleoperator_from_config,
     omx_leader,
     so100_leader,
     so101_leader,
+    xlerobot_vr,
     xlebi_so101_leader,
     bi_so101_leader,
 )

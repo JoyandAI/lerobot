@@ -78,6 +78,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so100_follower,
     so101_follower,
+    xlerobot,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -91,6 +92,8 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     so100_leader,
     so101_leader,
+    xlerobot_vr,
+    xlebi_so101_leader,
     bi_so101_leader,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
