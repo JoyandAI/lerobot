@@ -110,7 +110,12 @@ class XleBiSO101Leader(Teleoperator):
         # Add "right_" prefix
         right_action = self.right_arm.get_action()
         action_dict.update({f"right_arm_{key}": value for key, value in right_action.items()})
-
+        
+        action_dict["head_motor_1.pos"] = 0.0
+        action_dict["head_motor_2.pos"] = 0.0
+        action_dict["x.vel"] = 0.0
+        action_dict["y.vel"] = 0.0
+        action_dict["theta.vel"] = 0.0
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:

@@ -123,23 +123,22 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so100_follower,
     so101_follower,
-<<<<<<< HEAD:src/lerobot/record.py
     xlerobot,
-=======
-    bi_so101_follower,
->>>>>>> dev:src/lerobot/scripts/lerobot_record.py
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
     bi_so100_leader,
     bi_so101_leader,
+    gamepad,
     homunculus,
+    keyboard,
     koch_leader,
     make_teleoperator_from_config,
     omx_leader,
     so100_leader,
     so101_leader,
+    xlerobot_vr,
     xlebi_so101_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop

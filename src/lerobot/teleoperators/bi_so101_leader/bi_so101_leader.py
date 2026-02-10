@@ -68,8 +68,8 @@ class BiSO101Leader(Teleoperator):
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        return {f"left_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
-            f"right_{motor}.pos": float for motor in self.right_arm.bus.motors
+        return {f"left_arm_{motor}.pos": float for motor in self.left_arm.bus.motors} | {
+            f"right_arm_{motor}.pos": float for motor in self.right_arm.bus.motors
         }
 
     @cached_property
@@ -105,22 +105,22 @@ class BiSO101Leader(Teleoperator):
 
         # Add "left_" prefix
         left_action = self.left_arm.get_action()
-        action_dict.update({f"left_{key}": value for key, value in left_action.items()})
+        action_dict.update({f"left_arm_{key}": value for key, value in left_action.items()})
 
         # Add "right_" prefix
         right_action = self.right_arm.get_action()
-        action_dict.update({f"right_{key}": value for key, value in right_action.items()})
+        action_dict.update({f"right_arm_{key}": value for key, value in right_action.items()})
 
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         # Remove "left_" prefix
         left_feedback = {
-            key.removeprefix("left_"): value for key, value in feedback.items() if key.startswith("left_")
+            key.removeprefix("left_arm_"): value for key, value in feedback.items() if key.startswith("left_")
         }
         # Remove "right_" prefix
         right_feedback = {
-            key.removeprefix("right_"): value for key, value in feedback.items() if key.startswith("right_")
+            key.removeprefix("right_arm_"): value for key, value in feedback.items() if key.startswith("right_")
         }
 
         if left_feedback:
