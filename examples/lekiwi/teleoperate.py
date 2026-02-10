@@ -19,57 +19,62 @@ import time
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.so101_leader import SO101Leader, SO101LeaderConfig
-from lerobot.utils.robot_utils import busy_wait
-from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
+from lerobot.utils.robot_utils import precise_sleep
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 FPS = 30
 
 # Create the robot and teleoperator configurations
-robot_config = LeKiwiClientConfig(remote_ip="192.168.31.165", id="my_lekiwi")
-# port in Linux: /dev/ttyACM0, /dev/ttyACM1, etc.
-# port in MacOS: /dev/tty.usbmodemXXXXXXXXXXXX
-# port in Windows: COMX / COMXX
-teleop_arm_config = SO101LeaderConfig(port="COM69", id="R07252710")
-keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
+def main():
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.31.165", id="LK12252710")
+    # port in Linux: /dev/ttyACM0, /dev/ttyACM1, etc.
+    # port in MacOS: /dev/tty.usbmodemXXXXXXXXXXXX
+    # port in Windows: COMX / COMXX
+    teleop_arm_config = SO101LeaderConfig(port="COM69", id="R07252710")
+    keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
 
-# Initialize the robot and teleoperator
-robot = LeKiwiClient(robot_config)
-leader_arm = SO101Leader(teleop_arm_config)
-keyboard = KeyboardTeleop(keyboard_config)
+    # Initialize the robot and teleoperator
+    robot = LeKiwiClient(robot_config)
+    leader_arm = SO101Leader(teleop_arm_config)
+    keyboard = KeyboardTeleop(keyboard_config)
 
-# Connect to the robot and teleoperator
-# To connect you already should have this script running on LeKiwi: `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_awesome_kiwi`
-robot.connect()
-leader_arm.connect()
-keyboard.connect()
+    # Connect to the robot and teleoperator
+    # To connect you already should have this script running on LeKiwi: `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_awesome_kiwi`
+    robot.connect()
+    leader_arm.connect()
+    keyboard.connect()
 
-# Init rerun viewer
-_init_rerun(session_name="lekiwi_teleop")
+    # Init rerun viewer
+    init_rerun(session_name="lekiwi_teleop")
 
-if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
-    raise ValueError("Robot or teleop is not connected!")
+    if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
+        raise ValueError("Robot or teleop is not connected!")
 
-print("Starting teleop loop...")
-while True:
-    t0 = time.perf_counter()
+    print("Starting teleop loop...")
+    while True:
+        t0 = time.perf_counter()
 
-    # Get robot observation
-    observation = robot.get_observation()
+        # Get robot observation
+        observation = robot.get_observation()
 
-    # Get teleop action
-    # Arm
-    arm_action = leader_arm.get_action()
-    arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
-    # Keyboard
-    keyboard_keys = keyboard.get_action()
-    base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+        # Get teleop action
+        # Arm
+        arm_action = leader_arm.get_action()
+        arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
+        # Keyboard
+        keyboard_keys = keyboard.get_action()
+        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
 
-    action = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
+        action = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
 
-    # Send action to robot
-    _ = robot.send_action(action)
+        # Send action to robot
+        _ = robot.send_action(action)
 
-    # Visualize
-    log_rerun_data(observation=observation, action=action)
+        # Visualize
+        log_rerun_data(observation=observation, action=action)
 
-    busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
+        precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
+
+
+if __name__ == "__main__":
+    main()

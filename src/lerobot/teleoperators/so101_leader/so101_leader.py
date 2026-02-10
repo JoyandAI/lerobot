@@ -17,12 +17,12 @@
 import logging
 import time
 
-from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..teleoperator import Teleoperator
 from .config_so101_leader import SO101LeaderConfig
@@ -133,22 +133,100 @@ class SO101Leader(Teleoperator):
 
     def setup_motors(self) -> None:
         expected_ids = [1]
-        # Check if there are other motors on the bus
-        succ, msg = self._check_unexpected_motors_on_bus(expected_ids=expected_ids, raise_on_error=True)
-        while not succ:
-            input(msg)
-            succ, msg = self._check_unexpected_motors_on_bus(expected_ids=expected_ids, raise_on_error=True)
 
         for motor in reversed(self.bus.motors):
-            input(f"Connect the controller board to the '{motor}' motor ONLY and press enter.")
-            succ, msg = self._check_unexpected_motors_on_bus(expected_ids=expected_ids, raise_on_error=False)
-            while not succ:
-                input(msg)
-                succ, msg = self._check_unexpected_motors_on_bus(expected_ids=expected_ids, raise_on_error=False)            
-            self.bus.setup_motor(motor)
-            print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
-            expected_ids.append(self.bus.motors[motor].id)
+            input(f"Connect the controller board to the '{motor}' motor ONLY and press ENTER.")
+            target_motor_id = self.bus.motors[motor].id  # 目标序号i
+            
+            # Check motor on bus according to the rules
+            should_setup = self._check_and_confirm_motor_setup(target_motor_id)
+            if should_setup:
+                self.bus.setup_motor(motor)
+                print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
+                expected_ids.append(self.bus.motors[motor].id)
+            else:
+                # Skipped because motor ID already matches target
+                print(f"'{motor}' motor ID is already {target_motor_id}, skipping setup.")
+                expected_ids.append(target_motor_id)
 
+    def _check_and_confirm_motor_setup(self, target_motor_id: int) -> bool:
+        """
+        Check motor on bus and confirm if setup is needed according to the rules:
+        - Rule a: At most 1 motor on bus, raise error if more than 1
+        - Rule b: If only 1 motor with ID 1 (factory default), return True to setup
+        - Rule c: If motor ID already matches target_motor_id, return False to skip
+        - Rule d: If motor ID is neither 1 nor target_motor_id, ask user confirmation
+        
+        Args:
+            target_motor_id: Target motor ID (i) for current joint
+            
+        Returns:
+            True if setup should proceed, False if should skip
+        """
+        # Ensure the bus is connected
+        if not self.bus.is_connected:
+            self.bus.connect(handshake=False)
+        
+        # Scan all motors at the current baudrate
+        current_baudrate = self.bus.get_baudrate()
+        self.bus.set_baudrate(current_baudrate)
+        
+        # Scan all motors on the bus
+        found_motors = self.bus.broadcast_ping(raise_on_error=False)
+        
+        if found_motors is None:
+            # If the scan fails, try other baudrates
+            for baudrate in self.bus.available_baudrates:
+                if baudrate == current_baudrate:
+                    continue
+                    
+                self.bus.set_baudrate(baudrate)
+                found_motors = self.bus.broadcast_ping(raise_on_error=False)
+                if found_motors is not None:
+                    break
+        
+        # Restore the original baudrate
+        self.bus.set_baudrate(current_baudrate)
+        
+        if found_motors is None:
+            raise RuntimeError("No motors found on the bus. Please connect the motor and try again.")
+        
+        # Rule a: At most 1 motor on bus
+        if len(found_motors) > 1:
+            motor_ids = list(found_motors.keys())
+            raise RuntimeError(
+                f"Expected at most 1 motor on the bus, but found {len(found_motors)} motors with IDs: {motor_ids}. "
+                f"Please connect only the motor to be set up."
+            )
+        
+        if len(found_motors) == 0:
+            raise RuntimeError("No motors found on the bus. Please connect the motor and try again.")
+        
+        # Only 1 motor found
+        found_motor_id = list(found_motors.keys())[0]
+        
+        # Rule b: If motor ID is 1 (factory default), proceed with setup
+        if found_motor_id == 1:
+            return True
+        
+        # Rule c: If motor ID already matches target, skip setup
+        if found_motor_id == target_motor_id:
+            return False
+        
+        # Rule d: Motor ID is neither 1 nor target_motor_id, ask user confirmation
+        user_input = input(
+            f"There is 1 motor on the bus with ID {found_motor_id}, not factory default ID 1. "
+            f"Do you want to force modify its ID to {target_motor_id}? (yes/no): "
+        )
+        if user_input.strip().lower() == "yes":
+            # User confirmed, proceed with setup (setup_motor will handle the ID modification)
+            return True
+        else:
+            # User declined, raise error
+            raise RuntimeError(
+                f"Motor ID modification cancelled. Found motor ID {found_motor_id}, expected motor ID {target_motor_id}."
+            )
+    
     def _check_unexpected_motors_on_bus(self, expected_ids: list[int], raise_on_error: bool = True) -> None:
         """
         Check if there are other motors on the bus, if there are other motors, stop the setup process.        

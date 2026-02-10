@@ -35,7 +35,7 @@ gamepad to take control of the robot during training. Initially intervene freque
 reduce interventions as the policy improves.
 
 **WORKFLOW**:
-1. Determine robot workspace bounds using `find_joint_limits.py`
+1. Determine robot workspace bounds using `lerobot-find-joint-limits`
 2. Record demonstrations with `gym_manipulator.py` in record mode
 3. Process the dataset and determine camera crops with `crop_dataset_roi.py`
 4. Start the learner server with the training configuration
@@ -63,6 +63,8 @@ from lerobot.configs.train import TrainRLServerPipelineConfig
 from lerobot.policies.factory import make_policy
 from lerobot.policies.sac.modeling_sac import SACPolicy
 from lerobot.processor import TransitionKey
+from lerobot.rl.process import ProcessSignalHandler
+from lerobot.rl.queue import get_last_item_from_queue
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
 from lerobot.teleoperators.utils import TeleopEvents
@@ -75,10 +77,8 @@ from lerobot.transport.utils import (
     send_bytes_in_chunks,
     transitions_to_bytes,
 )
-from lerobot.utils.process import ProcessSignalHandler
-from lerobot.utils.queue import get_last_item_from_queue
 from lerobot.utils.random_utils import set_seed
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.transition import (
     Transition,
     move_state_dict_to_device,
@@ -96,8 +96,6 @@ from .gym_manipulator import (
     make_robot_env,
     step_env_and_process_transition,
 )
-
-ACTOR_SHUTDOWN_TIMEOUT = 30
 
 # Main entry point
 
@@ -400,7 +398,7 @@ def act_with_policy(
 
         if cfg.env.fps is not None:
             dt_time = time.perf_counter() - start_time
-            busy_wait(1 / cfg.env.fps - dt_time)
+            precise_sleep(1 / cfg.env.fps - dt_time)
 
 
 #  Communication Functions - Group all gRPC/messaging functions

@@ -18,13 +18,23 @@ import base64
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 
 import cv2
+import draccus
 import zmq
 import argparse
 
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
+
+
+@dataclass
+class LeKiwiServerConfig:
+    """Configuration for the LeKiwi host script."""
+
+    robot: LeKiwiConfig = field(default_factory=LeKiwiConfig)
+    host: LeKiwiHostConfig = field(default_factory=LeKiwiHostConfig)
 
 
 class LeKiwiHost:
@@ -48,27 +58,26 @@ class LeKiwiHost:
         self.zmq_context.term()
 
 
-def main(robot_id: str):
+@draccus.wrap()
+def main(cfg: LeKiwiServerConfig):
     logging.info("Configuring LeKiwi")
-    robot_config = LeKiwiConfig()
-    robot_config.id = robot_id
-    robot = LeKiwi(robot_config)
+    robot = LeKiwi(cfg.robot)
 
     logging.info("Connecting LeKiwi")
     robot.connect()
 
     logging.info("Starting HostAgent")
-    host_config = LeKiwiHostConfig()
-    host = LeKiwiHost(host_config)
+    host = LeKiwiHost(cfg.host)
 
     last_cmd_time = time.time()
     watchdog_active = False
     logging.info("Waiting for commands...")
+    last_cmd_time = 0 #
     try:
         # Business logic
         start = time.perf_counter()
-        duration = 0
-        while duration < host.connection_time_s:
+        #duration = 0
+        while True : #duration < host.connection_time_s:
             loop_start_time = time.time()
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
@@ -78,7 +87,9 @@ def main(robot_id: str):
                 watchdog_active = False
             except zmq.Again:
                 if not watchdog_active:
-                    logging.warning("No command available")
+                    if time.time() - last_cmd_time > 5.0:
+                        logging.warning("No command available for 5s")
+                        last_cmd_time = time.time()
             except Exception as e:
                 logging.error("Message fetching failed: %s", e)
 
@@ -112,7 +123,7 @@ def main(robot_id: str):
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))
-            duration = time.perf_counter() - start
+            # duration = time.perf_counter() - start
         print("Cycle time reached.")
 
     except KeyboardInterrupt:
@@ -126,9 +137,4 @@ def main(robot_id: str):
 
 
 if __name__ == "__main__":
-    # temporary arg parse: set robot id from the command arg like -robot_id=R12251899
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--robot_id", type=str)
-    args = parser.parse_args()
-
-    main(args.robot_id)
+    main()

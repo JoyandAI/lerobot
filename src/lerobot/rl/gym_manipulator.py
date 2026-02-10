@@ -73,7 +73,8 @@ from lerobot.teleoperators import (
 )
 from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.constants import ACTION, DONE, OBS_IMAGES, OBS_STATE, REWARD
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
 
 logging.basicConfig(level=logging.INFO)
@@ -113,7 +114,7 @@ def reset_follower_position(robot_arm: Robot, target_position: np.ndarray) -> No
     for pose in trajectory:
         action_dict = dict(zip(current_position_dict, pose, strict=False))
         robot_arm.bus.sync_write("Goal_Position", action_dict)
-        busy_wait(0.015)
+        precise_sleep(0.015)
 
 
 class RobotEnv(gym.Env):
@@ -180,7 +181,7 @@ class RobotEnv(gym.Env):
 
         # Define observation spaces for images and other states.
         if current_observation is not None and "pixels" in current_observation:
-            prefix = "observation.images"
+            prefix = OBS_IMAGES
             observation_spaces = {
                 f"{prefix}.{key}": gym.spaces.Box(
                     low=0, high=255, shape=current_observation["pixels"][key].shape, dtype=np.uint8
@@ -190,7 +191,7 @@ class RobotEnv(gym.Env):
 
         if current_observation is not None:
             agent_pos = current_observation["agent_pos"]
-            observation_spaces["observation.state"] = gym.spaces.Box(
+            observation_spaces[OBS_STATE] = gym.spaces.Box(
                 low=0,
                 high=10,
                 shape=agent_pos.shape,
@@ -237,7 +238,7 @@ class RobotEnv(gym.Env):
             reset_follower_position(self.robot, np.array(self.reset_pose))
             log_say("Reset the environment done.", play_sounds=True)
 
-        busy_wait(self.reset_time_s - (time.perf_counter() - start_time))
+        precise_sleep(self.reset_time_s - (time.perf_counter() - start_time))
 
         super().reset(seed=seed, options=options)
 
@@ -600,9 +601,9 @@ def control_loop(
     if cfg.mode == "record":
         action_features = teleop_device.action_features
         features = {
-            "action": action_features,
-            "next.reward": {"dtype": "float32", "shape": (1,), "names": None},
-            "next.done": {"dtype": "bool", "shape": (1,), "names": None},
+            ACTION: action_features,
+            REWARD: {"dtype": "float32", "shape": (1,), "names": None},
+            DONE: {"dtype": "bool", "shape": (1,), "names": None},
         }
         if use_gripper:
             features["complementary_info.discrete_penalty"] = {
@@ -612,7 +613,7 @@ def control_loop(
             }
 
         for key, value in transition[TransitionKey.OBSERVATION].items():
-            if key == "observation.state":
+            if key == OBS_STATE:
                 features[key] = {
                     "dtype": "float32",
                     "shape": value.squeeze(0).shape,
@@ -671,9 +672,9 @@ def control_loop(
             )
             frame = {
                 **observations,
-                "action": action_to_record.cpu(),
-                "next.reward": np.array([transition[TransitionKey.REWARD]], dtype=np.float32),
-                "next.done": np.array([terminated or truncated], dtype=bool),
+                ACTION: action_to_record.cpu(),
+                REWARD: np.array([transition[TransitionKey.REWARD]], dtype=np.float32),
+                DONE: np.array([terminated or truncated], dtype=bool),
             }
             if use_gripper:
                 discrete_penalty = transition[TransitionKey.COMPLEMENTARY_DATA].get("discrete_penalty", 0.0)
@@ -695,7 +696,7 @@ def control_loop(
             episode_idx += 1
 
             if dataset is not None:
-                if transition[TransitionKey.INFO].get("rerecord_episode", False):
+                if transition[TransitionKey.INFO].get(TeleopEvents.RERECORD_EPISODE, False):
                     logging.info(f"Re-recording episode {episode_idx}")
                     dataset.clear_episode_buffer()
                     episode_idx -= 1
@@ -712,7 +713,7 @@ def control_loop(
             transition = env_processor(transition)
 
         # Maintain fps timing
-        busy_wait(dt - (time.perf_counter() - step_start_time))
+        precise_sleep(dt - (time.perf_counter() - step_start_time))
 
     if dataset is not None and cfg.dataset.push_to_hub:
         logging.info("Pushing dataset to hub")
@@ -732,7 +733,7 @@ def replay_trajectory(
         download_videos=False,
     )
     episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == cfg.dataset.replay_episode)
-    actions = episode_frames.select_columns("action")
+    actions = episode_frames.select_columns(ACTION)
 
     _, info = env.reset()
 
@@ -740,11 +741,11 @@ def replay_trajectory(
         start_time = time.perf_counter()
         transition = create_transition(
             observation=env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {},
-            action=action_data["action"],
+            action=action_data[ACTION],
         )
         transition = action_processor(transition)
         env.step(transition[TransitionKey.ACTION])
-        busy_wait(1 / cfg.env.fps - (time.perf_counter() - start_time))
+        precise_sleep(1 / cfg.env.fps - (time.perf_counter() - start_time))
 
 
 @parser.wrap()
