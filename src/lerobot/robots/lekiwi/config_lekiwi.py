@@ -26,7 +26,7 @@ def lekiwi_cameras_config() -> dict[str, CameraConfig]:
             index_or_path="/dev/video0", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
         ),
         "wrist": OpenCVCameraConfig(
-            index_or_path="/dev/video2", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+            index_or_path="/dev/video2", fps=30, width=640, height=360, rotation=Cv2Rotation.NO_ROTATION
         ),
     }
 
@@ -56,7 +56,7 @@ class LeKiwiHostConfig:
     port_zmq_observations: int = 5556
 
     # Duration of the application
-    connection_time_s: int = 300
+    connection_time_s: int = 60000
 
     # Watchdog: stop the robot if no command is received for over 0.5 seconds.
     watchdog_timeout_ms: int = 500

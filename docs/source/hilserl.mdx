@@ -95,7 +95,6 @@ class HILSerlProcessorConfig:
 class ObservationConfig:
     add_joint_velocity_to_observation: bool = False    # Add joint velocities to state
     add_current_to_observation: bool = False    # Add motor currents to state
-    add_ee_pose_to_observation: bool = False    # Add end-effector pose to state
     display_cameras: bool = False    # Display camera feeds during execution
 
 class ImagePreprocessingConfig:
@@ -105,7 +104,6 @@ class ImagePreprocessingConfig:
 class GripperConfig:
     use_gripper: bool = True    # Enable gripper control
     gripper_penalty: float = 0.0    # Penalty for inappropriate gripper usage
-    gripper_penalty_in_reward: bool = False    # Include gripper penalty in reward
 
 class ResetConfig:
     fixed_reset_joint_positions: Any | None = None    # Joint positions for reset
@@ -288,7 +286,6 @@ You can enable multiple observation processing features simultaneously:
       "observation": {
         "add_joint_velocity_to_observation": true,
         "add_current_to_observation": true,
-        "add_ee_pose_to_observation": false,
         "display_cameras": false
       }
     }
@@ -304,19 +301,19 @@ Before collecting demonstrations, you need to determine the appropriate operatio
 
 This helps simplify the problem of learning on the real robot in two ways: 1) by limiting the robot's operational space to a specific region that solves the task and avoids unnecessary or unsafe exploration, and 2) by allowing training in end-effector space rather than joint space. Empirically, learning in joint space for reinforcement learning in manipulation is often a harder problem - some tasks are nearly impossible to learn in joint space but become learnable when the action space is transformed to end-effector coordinates.
 
-**Using find_joint_limits.py**
+**Using lerobot-find-joint-limits**
 
 This script helps you find the safe operational bounds for your robot's end-effector. Given that you have a follower and leader arm, you can use the script to find the bounds for the follower arm that will be applied during training.
 Bounding the action space will reduce the redundant exploration of the agent and guarantees safety.
 
 ```bash
-python -m lerobot.scripts.find_joint_limits \
-    --robot.type=so100_follower \
-    --robot.port=/dev/tty.usbmodem58760431541 \
-    --robot.id=black \
-    --teleop.type=so100_leader \
-    --teleop.port=/dev/tty.usbmodem58760431551 \
-    --teleop.id=blue
+lerobot-find-joint-limits \
+  --robot.type=so100_follower \
+  --robot.port=/dev/tty.usbmodem58760431541 \
+  --robot.id=black \
+  --teleop.type=so100_leader \
+  --teleop.port=/dev/tty.usbmodem58760431551 \
+  --teleop.id=blue
 ```
 
 **Workflow**
