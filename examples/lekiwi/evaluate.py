@@ -17,7 +17,7 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+# from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
@@ -32,7 +32,7 @@ FPS = 30
 EPISODE_TIME_SEC = 120
 TASK_DESCRIPTION = "My task description"
 HF_MODEL_ID = "outputs/pretrained_model"
-HF_DATASET_ID = "lekiwi_test/eval_lekiwi_catch_block_cameras_right"
+HF_DATASET_ID = "lekiwi_test/eval_lekiwi_test"
 
 
 def main():
