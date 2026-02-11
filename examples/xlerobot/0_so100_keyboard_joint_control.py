@@ -274,7 +274,7 @@ def main():
     
     try:
         # Import necessary modules
-        from lerobot.robots.so100_follower import SO100Follower, SO100FollowerConfig
+        from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
         from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
         
         # Get port
@@ -288,8 +288,8 @@ def main():
             print(f"Connecting to port: {port}")
         
         # Configure robot
-        robot_config = SO100FollowerConfig(port=port)
-        robot = SO100Follower(robot_config)
+        robot_config = SO101FollowerConfig(port=port)
+        robot = SO101Follower(robot_config)
         
         # Configure keyboard
         keyboard_config = KeyboardTeleopConfig()
