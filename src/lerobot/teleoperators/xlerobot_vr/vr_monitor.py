@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 # Set the absolute path to the xlevr folder
-XLEVR_PATH = "D:\workspace\XLerobot\XLeVR"
+XLEVR_PATH = "/home/joyandai/lerobot/XLeVR"
 
 def setup_xlevr_environment():
     """Setup xlevr environment"""
@@ -277,8 +277,8 @@ class VRMonitor:
                     
                     # Maintain backward compatibility, save latest goal
                     self.latest_goal = goal
-                if goal.metadata and "buttons" in goal.metadata:
-                    print(f"[VR_MONITOR] {goal.arm} buttons: {goal.metadata['buttons']}")
+                # if goal.metadata and "buttons" in goal.metadata:
+                #     print(f"[VR_MONITOR] {goal.arm} buttons: {goal.metadata['buttons']}")
 
             except asyncio.TimeoutError:
                 # Timeout, continue loop
