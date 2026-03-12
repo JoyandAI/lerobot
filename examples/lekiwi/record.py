@@ -21,7 +21,7 @@ from lerobot.robots.lekiwi.config_lekiwi import LeKiwiClientConfig
 from lerobot.robots.lekiwi.lekiwi_client import LeKiwiClient
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
-from lerobot.teleoperators.so101_leader import SO101Leader, SO101LeaderConfig
+from lerobot.teleoperators.so_leader import SO100Leader, SO100LeaderConfig
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
@@ -99,11 +99,12 @@ def main():
     listener, events = init_keyboard_listener()
     init_rerun(session_name="lekiwi_record")
 
-    if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
-        raise ValueError("Robot or teleop is not connected!")
-
-    print("Starting record loop...")
     try:
+        if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
+            raise ValueError("Robot or teleop is not connected!")
+
+        print("Starting record loop...")
+        recorded_episodes = 0
         while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
             log_say(f"Recording episode {recorded_episodes}")
 
@@ -139,10 +140,6 @@ def main():
                     robot_action_processor=robot_action_processor,
                     robot_observation_processor=robot_observation_processor,
                 )
-            if dataset.episode_buffer is None or dataset.episode_buffer.get("size", 0) == 0:
-                print("[WARN] Episode buffer empty, skip save")
-                dataset.clear_episode_buffer()
-                continue
 
             if events["rerecord_episode"]:
                 log_say("Re-record episode")
@@ -154,26 +151,16 @@ def main():
             # Save episode
             dataset.save_episode()
             recorded_episodes += 1
-            print(f"{recorded_episodes} is end ")
-    except KeyboardInterrupt :
-            print("[ERROR] Recording KeyboardInterrupt interrupted")
-            dataset.clear_episode_buffer()
-    except Exception as e:
-            print(f"[ERROR] Recording interrupted: {e}")
-            print("[INFO] Discarding current incomplete episode")
-            dataset.clear_episode_buffer()
     finally:
-        print("[INFO] Finalizing dataset (saving metadata)...")
-        dataset.clear_episode_buffer(delete_images=True)
-        dataset.finalize()
-        # Disable push to hub by default, uncomment to push to hub
-        # dataset.push_to_hub()
-
+        # Clean up
         log_say("Stop recording")
         robot.disconnect()
         leader_arm.disconnect()
         keyboard.disconnect()
-        listener.stop()         
+        listener.stop()
+
+        dataset.finalize()
+        dataset.push_to_hub()
 
 
 if __name__ == "__main__":

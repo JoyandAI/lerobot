@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import platform
 from typing import cast
 
 from lerobot.utils.import_utils import make_device_from_device_class
@@ -42,6 +41,11 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
             from .reachy2_camera.reachy2_camera import Reachy2Camera
 
             cameras[key] = Reachy2Camera(cfg)
+
+        elif cfg.type == "zmq":
+            from .zmq.camera_zmq import ZMQCamera
+
+            cameras[key] = ZMQCamera(cfg)
 
         else:
             try:
