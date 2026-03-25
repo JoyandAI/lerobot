@@ -17,6 +17,8 @@
 
 import logging
 import shutil
+from collections import defaultdict
+from copy import deepcopy
 from pathlib import Path
 
 import datasets
@@ -24,16 +26,7 @@ import pandas as pd
 import tqdm
 
 from lerobot.datasets.compute_stats import aggregate_stats
-from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
-from lerobot.datasets.feature_utils import get_hf_features_from_features
-from lerobot.datasets.io_utils import (
-    get_file_size_in_mb,
-    get_parquet_file_size_in_mb,
-    to_parquet_with_hf_images,
-    write_info,
-    write_stats,
-    write_tasks,
-)
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_DATA_FILE_SIZE_IN_MB,
@@ -41,9 +34,43 @@ from lerobot.datasets.utils import (
     DEFAULT_EPISODES_PATH,
     DEFAULT_VIDEO_FILE_SIZE_IN_MB,
     DEFAULT_VIDEO_PATH,
+    get_file_size_in_mb,
+    get_hf_features_from_features,
+    get_parquet_file_size_in_mb,
+    to_parquet_with_hf_images,
     update_chunk_file_indices,
+    write_info,
+    write_stats,
+    write_tasks,
 )
 from lerobot.datasets.video_utils import concatenate_video_files, get_video_duration_in_s
+
+
+def _normalize_features(features: dict[str, dict], *, drop_video_codec: bool = False) -> dict[str, dict]:
+    """Normalize feature metadata for compatibility checks and aggregation.
+
+    Some datasets may encode video metadata under ``video_info`` while newer ones
+    store the same payload under ``info``. Treat them as equivalent and keep the
+    canonical ``info`` field only. Optionally ignore ``video.codec`` so datasets
+    with identical video schema but different encoders can still be merged.
+    """
+
+    normalized = deepcopy(features)
+
+    for feature in normalized.values():
+        if feature.get("dtype") != "video":
+            continue
+
+        info = feature.get("info")
+        video_info = feature.pop("video_info", None)
+        if info is None and video_info is not None:
+            feature["info"] = video_info
+            info = feature["info"]
+
+        if drop_video_codec and isinstance(info, dict):
+            info.pop("video.codec", None)
+
+    return normalized
 
 
 def validate_all_metadata(all_metadata: list[LeRobotDatasetMetadata]):
@@ -65,7 +92,9 @@ def validate_all_metadata(all_metadata: list[LeRobotDatasetMetadata]):
 
     fps = all_metadata[0].fps
     robot_type = all_metadata[0].robot_type
-    features = all_metadata[0].features
+    features = _normalize_features(all_metadata[0].features)
+    comparable_features = _normalize_features(all_metadata[0].features, drop_video_codec=True)
+    video_codecs_by_key = defaultdict(set)
 
     for meta in tqdm.tqdm(all_metadata, desc="Validate all meta data"):
         if fps != meta.fps:
@@ -74,10 +103,21 @@ def validate_all_metadata(all_metadata: list[LeRobotDatasetMetadata]):
             raise ValueError(
                 f"Same robot_type is expected, but got robot_type={meta.robot_type} instead of {robot_type}."
             )
-        if features != meta.features:
+        meta_features = _normalize_features(meta.features)
+        comparable_meta_features = _normalize_features(meta.features, drop_video_codec=True)
+        if comparable_features != comparable_meta_features:
             raise ValueError(
                 f"Same features is expected, but got features={meta.features} instead of {features}."
             )
+        for key, feature in meta_features.items():
+            if feature.get("dtype") != "video":
+                continue
+            codec = feature.get("info", {}).get("video.codec")
+            video_codecs_by_key[key].add(codec)
+
+    for key, codecs in video_codecs_by_key.items():
+        if len(codecs) > 1:
+            features[key].setdefault("info", {})["video.codec"] = "mixed"
 
     return fps, robot_type, features
 
@@ -112,6 +152,7 @@ def update_meta_data(
     meta_idx,
     data_idx,
     videos_idx,
+    meta_dst=None,
 ):
     """Updates metadata DataFrame with new chunk, file, and timestamp indices.
 
@@ -132,8 +173,12 @@ def update_meta_data(
         pd.DataFrame: Updated DataFrame with adjusted indices and timestamps.
     """
 
-    df["meta/episodes/chunk_index"] = df["meta/episodes/chunk_index"] + meta_idx["chunk"]
-    df["meta/episodes/file_index"] = df["meta/episodes/file_index"] + meta_idx["file"]
+    if meta_dst is None:
+        df["meta/episodes/chunk_index"] = df["meta/episodes/chunk_index"] + meta_idx["chunk"]
+        df["meta/episodes/file_index"] = df["meta/episodes/file_index"] + meta_idx["file"]
+    else:
+        df["meta/episodes/chunk_index"] = meta_dst[0]
+        df["meta/episodes/file_index"] = meta_dst[1]
 
     # Update data file indices using source-to-destination mapping
     # This is critical for handling datasets that are already results of a merge
@@ -230,6 +275,30 @@ def update_meta_data(
     df["episode_index"] = df["episode_index"] + dst_meta.info["total_episodes"]
 
     return df
+
+
+def resolve_destination_parquet_file(
+    src_path: Path,
+    idx: dict[str, int],
+    max_mb: float,
+    chunk_size: int,
+    default_path: str,
+    aggr_root: Path,
+) -> tuple[int, int]:
+    """Predict which destination parquet file append_or_create_parquet_file will use."""
+    dst_chunk, dst_file = idx["chunk"], idx["file"]
+    dst_path = aggr_root / default_path.format(chunk_index=dst_chunk, file_index=dst_file)
+
+    if not dst_path.exists():
+        return dst_chunk, dst_file
+
+    src_size = get_parquet_file_size_in_mb(src_path)
+    dst_size = get_parquet_file_size_in_mb(dst_path)
+
+    if dst_size + src_size >= max_mb:
+        return update_chunk_file_indices(dst_chunk, dst_file, chunk_size)
+
+    return dst_chunk, dst_file
 
 
 def aggregate_datasets(
@@ -346,6 +415,8 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
         # dst_file_durations tracks duration of each destination file
         if "dst_file_durations" not in videos_idx[key]:
             videos_idx[key]["dst_file_durations"] = {}
+        if "dst_file_codecs" not in videos_idx[key]:
+            videos_idx[key]["dst_file_codecs"] = {}
 
     for key, video_idx in videos_idx.items():
         unique_chunk_file_pairs = {
@@ -361,6 +432,8 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
         chunk_idx = video_idx["chunk"]
         file_idx = video_idx["file"]
         dst_file_durations = video_idx["dst_file_durations"]
+        dst_file_codecs = video_idx["dst_file_codecs"]
+        src_codec = src_meta.features[key].get("info", {}).get("video.codec")
 
         for src_chunk_idx, src_file_idx in unique_chunk_file_pairs:
             src_path = src_meta.root / DEFAULT_VIDEO_PATH.format(
@@ -386,6 +459,7 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 shutil.copy(str(src_path), str(dst_path))
                 # Track duration of this destination file
                 dst_file_durations[dst_key] = src_duration
+                dst_file_codecs[dst_key] = src_codec
                 videos_idx[key]["episode_duration"] += src_duration
                 continue
 
@@ -393,7 +467,9 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
             src_size = get_file_size_in_mb(src_path)
             dst_size = get_file_size_in_mb(dst_path)
 
-            if dst_size + src_size >= video_files_size_in_mb:
+            dst_codec = dst_file_codecs.get(dst_key)
+
+            if dst_codec != src_codec or dst_size + src_size >= video_files_size_in_mb:
                 # Rotate to a new file - offset is 0
                 chunk_idx, file_idx = update_chunk_file_indices(chunk_idx, file_idx, chunk_size)
                 dst_key = (chunk_idx, file_idx)
@@ -408,6 +484,7 @@ def aggregate_videos(src_meta, dst_meta, videos_idx, video_files_size_in_mb, chu
                 shutil.copy(str(src_path), str(dst_path))
                 # Track duration of this new destination file
                 dst_file_durations[dst_key] = src_duration
+                dst_file_codecs[dst_key] = src_codec
             else:
                 # Append to existing destination file
                 # Offset is the current duration of this destination file
@@ -529,6 +606,14 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
     chunk_file_ids = sorted(chunk_file_ids)
     for chunk_idx, file_idx in chunk_file_ids:
         src_path = src_meta.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+        meta_dst = resolve_destination_parquet_file(
+            src_path,
+            meta_idx,
+            DEFAULT_DATA_FILE_SIZE_IN_MB,
+            DEFAULT_CHUNK_SIZE,
+            DEFAULT_EPISODES_PATH,
+            dst_meta.root,
+        )
         df = pd.read_parquet(src_path)
         df = update_meta_data(
             df,
@@ -536,9 +621,10 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
             meta_idx,
             data_idx,
             videos_idx,
+            meta_dst=meta_dst,
         )
 
-        meta_idx, _ = append_or_create_parquet_file(
+        meta_idx, written_meta_dst = append_or_create_parquet_file(
             df,
             src_path,
             meta_idx,
@@ -548,6 +634,10 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
             contains_images=False,
             aggr_root=dst_meta.root,
         )
+        if written_meta_dst != meta_dst:
+            raise RuntimeError(
+                f"Metadata destination mismatch: predicted {meta_dst}, wrote {written_meta_dst} for {src_path}."
+            )
 
     # Increment latest_duration by the total duration added from this source dataset
     for k in videos_idx:

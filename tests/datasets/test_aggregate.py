@@ -14,12 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import datasets
+import pandas as pd
+import pytest
 import torch
 
-from lerobot.datasets.aggregate import aggregate_datasets
+from lerobot.datasets.aggregate import (
+    aggregate_datasets,
+    aggregate_metadata,
+    aggregate_videos,
+    validate_all_metadata,
+)
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from tests.fixtures.constants import DUMMY_REPO_ID
 
@@ -260,8 +268,8 @@ def test_aggregate_datasets(tmp_path, lerobot_dataset_factory):
 
     # Mock the revision to prevent Hub calls during dataset loading
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "test_aggr")
@@ -311,8 +319,8 @@ def test_aggregate_with_low_threshold(tmp_path, lerobot_dataset_factory):
 
     # Mock the revision to prevent Hub calls during dataset loading
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "small_aggr")
@@ -367,8 +375,8 @@ def test_video_timestamps_regression(tmp_path, lerobot_dataset_factory):
     )
 
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "regression_aggr")
@@ -492,8 +500,8 @@ def test_aggregate_image_datasets(tmp_path, lerobot_dataset_factory):
 
     # Load the aggregated dataset
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "image_aggr")
@@ -562,8 +570,8 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
     )
 
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "ds_ab")
@@ -590,8 +598,8 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
     )
 
     with (
-        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
-        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
     ):
         mock_get_safe_version.return_value = "v3.0"
         mock_snapshot_download.return_value = str(tmp_path / "ds_abc")
@@ -614,3 +622,132 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
 
     # This would raise FileNotFoundError before the fix
     assert_dataset_iteration_works(ds_abc)
+
+
+def test_validate_all_metadata_allows_mixed_video_codecs():
+    base_features = {
+        "action": {"dtype": "float32", "shape": (6,), "names": ["a", "b", "c", "d", "e", "f"]},
+        "observation.images.front": {
+            "dtype": "video",
+            "shape": (360, 640, 3),
+            "names": ["height", "width", "channels"],
+            "info": {
+                "video.height": 360,
+                "video.width": 640,
+                "video.codec": "h264",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": False,
+                "video.fps": 30,
+                "video.channels": 3,
+                "has_audio": False,
+            },
+        },
+    }
+    av1_features = datasets.utils.py_utils.copy.deepcopy(base_features)
+    av1_features["observation.images.front"]["info"]["video.codec"] = "av1"
+
+    meta_a = SimpleNamespace(fps=30, robot_type="koch", features=base_features)
+    meta_b = SimpleNamespace(fps=30, robot_type="koch", features=av1_features)
+
+    _, _, merged_features = validate_all_metadata([meta_a, meta_b])
+
+    assert merged_features["observation.images.front"]["info"]["video.codec"] == "mixed"
+
+
+def test_aggregate_videos_rotates_on_codec_mismatch(tmp_path):
+    src_root_a = tmp_path / "src_a"
+    src_root_b = tmp_path / "src_b"
+    dst_root = tmp_path / "dst"
+    src_path_a = src_root_a / "videos" / "observation.images.front" / "chunk-000" / "file-000.mp4"
+    src_path_b = src_root_b / "videos" / "observation.images.front" / "chunk-000" / "file-000.mp4"
+    src_path_a.parent.mkdir(parents=True, exist_ok=True)
+    src_path_b.parent.mkdir(parents=True, exist_ok=True)
+    src_path_a.write_bytes(b"a")
+    src_path_b.write_bytes(b"b")
+
+    src_meta_a = SimpleNamespace(
+        root=src_root_a,
+        features={"observation.images.front": {"dtype": "video", "info": {"video.codec": "h264"}}},
+        episodes=pd.DataFrame(
+            {"videos/observation.images.front/chunk_index": [0], "videos/observation.images.front/file_index": [0]}
+        ),
+    )
+    src_meta_b = SimpleNamespace(
+        root=src_root_b,
+        features={"observation.images.front": {"dtype": "video", "info": {"video.codec": "av1"}}},
+        episodes=pd.DataFrame(
+            {"videos/observation.images.front/chunk_index": [0], "videos/observation.images.front/file_index": [0]}
+        ),
+    )
+    dst_meta = SimpleNamespace(root=dst_root)
+    videos_idx = {
+        "observation.images.front": {
+            "chunk": 0,
+            "file": 0,
+            "latest_duration": 0,
+        }
+    }
+
+    with (
+        patch("lerobot.datasets.aggregate.get_video_duration_in_s", return_value=1.0),
+        patch("lerobot.datasets.aggregate.get_file_size_in_mb", return_value=1.0),
+        patch("lerobot.datasets.aggregate.concatenate_video_files") as mock_concat,
+    ):
+        videos_idx = aggregate_videos(src_meta_a, dst_meta, videos_idx, video_files_size_in_mb=10.0, chunk_size=100)
+        videos_idx = aggregate_videos(src_meta_b, dst_meta, videos_idx, video_files_size_in_mb=10.0, chunk_size=100)
+
+    assert not mock_concat.called
+    assert videos_idx["observation.images.front"]["src_to_dst"][(0, 0)] == (0, 1)
+    assert (dst_root / "videos" / "observation.images.front" / "chunk-000" / "file-001.mp4").exists()
+
+
+def test_aggregate_metadata_rewrites_self_references_to_actual_destination(tmp_path):
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    src_meta_path = src_root / "meta" / "episodes" / "chunk-000" / "file-001.parquet"
+    existing_dst_path = dst_root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    src_meta_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        {
+            "episode_index": [0],
+            "dataset_from_index": [0],
+            "dataset_to_index": [9],
+            "meta/episodes/chunk_index": [0],
+            "meta/episodes/file_index": [1],
+            "data/chunk_index": [0],
+            "data/file_index": [0],
+            "videos/observation.images.front/chunk_index": [0],
+            "videos/observation.images.front/file_index": [0],
+            "videos/observation.images.front/from_timestamp": [0.0],
+            "videos/observation.images.front/to_timestamp": [1.0],
+        }
+    ).to_parquet(src_meta_path)
+    pd.DataFrame({"episode_index": [-1]}).to_parquet(existing_dst_path)
+
+    src_meta = SimpleNamespace(
+        root=src_root,
+        episodes=pd.DataFrame({"meta/episodes/chunk_index": [0], "meta/episodes/file_index": [1]}),
+    )
+    dst_meta = SimpleNamespace(root=dst_root, info={"total_frames": 0, "total_episodes": 0})
+    meta_idx = {"chunk": 0, "file": 0}
+    data_idx = {"chunk": 0, "file": 0, "src_to_dst": {(0, 0): (0, 0)}}
+    videos_idx = {
+        "observation.images.front": {
+            "chunk": 0,
+            "file": 0,
+            "latest_duration": 0.0,
+            "episode_duration": 1.0,
+            "src_to_offset": {(0, 0): 0.0},
+            "src_to_dst": {(0, 0): (0, 0)},
+        }
+    }
+
+    with patch("lerobot.datasets.aggregate.get_parquet_file_size_in_mb", return_value=1.0):
+        aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx)
+
+    merged_df = pd.read_parquet(existing_dst_path)
+    rewritten = merged_df[merged_df["episode_index"] == 0].iloc[0]
+    assert rewritten["meta/episodes/chunk_index"] == 0
+    assert rewritten["meta/episodes/file_index"] == 0
