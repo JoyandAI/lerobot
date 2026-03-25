@@ -23,7 +23,7 @@ from typing import Any
 import torch
 
 from lerobot.configs.types import PolicyFeature
-from lerobot.datasets.feature_utils import build_dataset_frame, hw_to_dataset_features
+from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
 
 # NOTE: Configs need to be loaded for the client to be able to instantiate the policy config
 from lerobot.policies import (  # noqa: F401
@@ -89,10 +89,16 @@ def raw_observation_to_observation(
     raw_observation: RawObservation,
     lerobot_features: dict[str, dict],
     policy_image_features: dict[str, PolicyFeature],
+    rename_map: dict[str, str] | None = None,
 ) -> Observation:
     observation = {}
 
-    observation = prepare_raw_observation(raw_observation, lerobot_features, policy_image_features)
+    observation = prepare_raw_observation(
+        raw_observation,
+        lerobot_features,
+        policy_image_features,
+        rename_map=rename_map,
+    )
     for k, v in observation.items():
         if isinstance(v, torch.Tensor):  # VLAs present natural-language instructions in observations
             if "image" in k:
@@ -144,12 +150,29 @@ def prepare_raw_observation(
     robot_obs: RawObservation,
     lerobot_features: dict[str, dict],
     policy_image_features: dict[str, PolicyFeature],
+    rename_map: dict[str, str] | None = None,
 ) -> Observation:
     """Matches keys from the raw robot_obs dict to the keys expected by a given policy (passed as
     policy_image_features)."""
     # 1. {motor.pos1:value1, motor.pos2:value2, ..., laptop:np.ndarray} ->
     # -> {observation.state:[value1,value2,...], observation.images.laptop:np.ndarray}
     lerobot_obs = make_lerobot_observation(robot_obs, lerobot_features)
+    rename_map = dict(rename_map or {})
+
+    source_image_keys = [key for key in lerobot_features if is_image_key(key)]
+    target_image_keys = list(policy_image_features)
+    if not rename_map and source_image_keys and target_image_keys:
+        overlapping_keys = set(source_image_keys) & set(target_image_keys)
+        if not overlapping_keys:
+            rename_map.update(
+                {
+                    src_key: dst_key
+                    for src_key, dst_key in zip(source_image_keys, target_image_keys, strict=False)
+                }
+            )
+
+    if rename_map:
+        lerobot_obs = {rename_map.get(key, key): value for key, value in lerobot_obs.items()}
 
     # 2. Greps all observation.images.<> keys
     image_keys = list(filter(is_image_key, lerobot_obs))
@@ -164,7 +187,12 @@ def prepare_raw_observation(
     image_dict = {
         key: resize_robot_observation_image(torch.tensor(lerobot_obs[key]), policy_image_features[key].shape)
         for key in image_keys
+        if key in policy_image_features
     }
+
+    for key, feature in policy_image_features.items():
+        if key not in image_dict:
+            image_dict[key] = torch.zeros(feature.shape, dtype=torch.uint8)
 
     if "task" in robot_obs:
         state_dict["task"] = robot_obs["task"]

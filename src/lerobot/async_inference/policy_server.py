@@ -30,6 +30,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Empty, Queue
 from typing import Any
@@ -39,13 +40,15 @@ import grpc
 import torch
 
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
-from lerobot.processor import PolicyProcessorPipeline
+from lerobot.processor import (
+    PolicyAction,
+    PolicyProcessorPipeline,
+)
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
 from lerobot.transport.utils import receive_bytes_in_chunks
-from lerobot.types import PolicyAction
 
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
@@ -85,6 +88,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.lerobot_features = None
         self.actions_per_chunk = None
         self.policy = None
+        self.rename_map: dict[str, str] = {}
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
 
@@ -145,11 +149,10 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy_type = policy_specs.policy_type  # act, pi0, etc.
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
-
-        policy_class = get_policy_class(self.policy_type)
+        self.rename_map = policy_specs.rename_map
 
         start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.policy = self._load_policy(policy_specs)
         self.policy.to(self.device)
 
         # Load preprocessor and postprocessor, overriding device to match requested device
@@ -169,6 +172,39 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
 
         return services_pb2.Empty()
+
+    def _load_policy(self, policy_specs: RemotePolicyConfig):
+        policy_class = get_policy_class(self.policy_type)
+        pretrained_path = Path(policy_specs.pretrained_name_or_path)
+        adapter_config_path = pretrained_path / "adapter_config.json"
+        local_files_only = pretrained_path.is_dir()
+
+        if adapter_config_path.exists():
+            from peft import PeftConfig, PeftModel
+
+            self.logger.info(f"Loading PEFT adapter from {pretrained_path}")
+            peft_config = PeftConfig.from_pretrained(
+                str(pretrained_path), local_files_only=local_files_only
+            )
+            base_model_path = peft_config.base_model_name_or_path
+            if not base_model_path:
+                raise ValueError(
+                    "No base model path found in adapter_config.json. Can't load the PEFT adapter for async inference."
+                )
+
+            self.logger.info(f"Loading base policy for adapter from {base_model_path}")
+            policy = policy_class.from_pretrained(base_model_path, local_files_only=local_files_only)
+            return PeftModel.from_pretrained(
+                policy,
+                str(pretrained_path),
+                config=peft_config,
+                local_files_only=local_files_only,
+            )
+
+        return policy_class.from_pretrained(
+            policy_specs.pretrained_name_or_path,
+            local_files_only=local_files_only,
+        )
 
     def SendObservations(self, request_iterator, context):  # noqa: N802
         """Receive observations from the robot client"""
@@ -343,6 +379,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             observation_t.get_observation(),
             self.lerobot_features,
             self.policy_image_features,
+            rename_map=self.rename_map,
         )
         prepare_time = time.perf_counter() - start_prepare
 
