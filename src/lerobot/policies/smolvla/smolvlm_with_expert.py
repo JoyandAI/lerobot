@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import copy
+import os
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -23,6 +25,40 @@ from transformers import (
     AutoProcessor,
     SmolVLMForConditionalGeneration,
 )
+
+
+def _resolve_local_hf_snapshot(model_id: str) -> str | None:
+    """Return a local HF cache snapshot path for a repo id when available."""
+    if os.path.isdir(model_id):
+        return model_id
+
+    if "/" not in model_id:
+        return None
+
+    cache_root = Path(
+        os.environ.get("HUGGINGFACE_HUB_CACHE", Path.home() / ".cache" / "huggingface" / "hub")
+    )
+    repo_cache_dir = cache_root / f"models--{model_id.replace('/', '--')}"
+    if not repo_cache_dir.exists():
+        return None
+
+    refs_main = repo_cache_dir / "refs" / "main"
+    if refs_main.exists():
+        snapshot_name = refs_main.read_text().strip()
+        snapshot_dir = repo_cache_dir / "snapshots" / snapshot_name
+        if snapshot_dir.exists():
+            return str(snapshot_dir)
+
+    snapshots_dir = repo_cache_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return None
+
+    snapshot_dirs = [path for path in snapshots_dir.iterdir() if path.is_dir()]
+    if not snapshot_dirs:
+        return None
+
+    snapshot_dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return str(snapshot_dirs[0])
 
 
 def apply_rope(x, positions, max_wavelength=10_000):
@@ -62,6 +98,7 @@ class SmolVLMWithExpertModel(nn.Module):
     def __init__(
         self,
         model_id: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+        local_files_only: bool = False,
         load_vlm_weights: bool = True,
         train_expert_only: bool = True,
         freeze_vision_encoder: bool = False,
@@ -73,18 +110,34 @@ class SmolVLMWithExpertModel(nn.Module):
         device: str = "auto",
     ):
         super().__init__()
+        local_model_path = _resolve_local_hf_snapshot(model_id)
+        config_and_processor_path = local_model_path or model_id
+        vlm_weights_path = model_id
+        if local_model_path is not None:
+            snapshot_dir = Path(local_model_path)
+            has_local_vlm_weights = any(snapshot_dir.glob("*.safetensors")) or any(snapshot_dir.glob("*.bin"))
+            if has_local_vlm_weights:
+                vlm_weights_path = local_model_path
+
         if load_vlm_weights:
-            print(f"Loading  {model_id} weights ...")
+            print(f"Loading  {vlm_weights_path} weights ...")
             self.vlm = AutoModelForImageTextToText.from_pretrained(
-                model_id,
+                vlm_weights_path,
                 torch_dtype="bfloat16",
                 low_cpu_mem_usage=True,
+                local_files_only=local_files_only,
             )
             config = self.vlm.config
         else:
-            config = AutoConfig.from_pretrained(model_id)
+            config = AutoConfig.from_pretrained(
+                config_and_processor_path,
+                local_files_only=local_files_only,
+            )
             self.vlm = SmolVLMForConditionalGeneration(config=config)
-        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.processor = AutoProcessor.from_pretrained(
+            config_and_processor_path,
+            local_files_only=local_files_only,
+        )
         if num_vlm_layers > 0:
             print(f"Reducing the number of VLM layers to {num_vlm_layers} ...")
             self.get_vlm_model().text_model.layers = self.get_vlm_model().text_model.layers[:num_vlm_layers]

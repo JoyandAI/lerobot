@@ -18,14 +18,15 @@ from __future__ import annotations
 
 import importlib
 import logging
+from pathlib import Path
 from typing import Any, TypedDict, Unpack
 
 import torch
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
-from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
-from lerobot.datasets.feature_utils import dataset_to_policy_features
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
@@ -43,19 +44,25 @@ from lerobot.policies.utils import validate_visual_features_consistency
 from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 from lerobot.policies.wall_x.configuration_wall_x import WallXConfig
 from lerobot.policies.xvla.configuration_xvla import XVLAConfig
-from lerobot.processor import PolicyProcessorPipeline
+from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 from lerobot.processor.converters import (
     batch_to_transition,
     policy_action_to_transition,
     transition_to_batch,
     transition_to_policy_action,
 )
-from lerobot.types import PolicyAction
 from lerobot.utils.constants import (
     ACTION,
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
+
+
+def _should_use_local_files_only(pretrained_path: str | Path | None) -> bool:
+    if pretrained_path is None:
+        return False
+
+    return Path(pretrained_path).expanduser().is_dir()
 
 
 def get_policy_class(name: str) -> type[PreTrainedPolicy]:
@@ -471,6 +478,10 @@ def make_policy(
     if not cfg.input_features:
         cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
     kwargs["config"] = cfg
+    kwargs["local_files_only"] = _should_use_local_files_only(cfg.pretrained_path)
+
+    if kwargs["local_files_only"]:
+        setattr(cfg, "local_files_only", True)
 
     # Pass dataset_stats to the policy if available (needed for some policies like SARM)
     if ds_meta is not None and hasattr(ds_meta, "stats"):
@@ -499,7 +510,9 @@ def make_policy(
         logging.info("Loading policy's PEFT adapter.")
 
         peft_pretrained_path = cfg.pretrained_path
-        peft_config = PeftConfig.from_pretrained(peft_pretrained_path)
+        peft_config = PeftConfig.from_pretrained(
+            peft_pretrained_path, local_files_only=kwargs["local_files_only"]
+        )
 
         kwargs["pretrained_name_or_path"] = peft_config.base_model_name_or_path
         if not kwargs["pretrained_name_or_path"]:
@@ -511,7 +524,12 @@ def make_policy(
             )
 
         policy = policy_cls.from_pretrained(**kwargs)
-        policy = PeftModel.from_pretrained(policy, peft_pretrained_path, config=peft_config)
+        policy = PeftModel.from_pretrained(
+            policy,
+            peft_pretrained_path,
+            config=peft_config,
+            local_files_only=kwargs["local_files_only"],
+        )
 
     else:
         # Make a fresh policy.

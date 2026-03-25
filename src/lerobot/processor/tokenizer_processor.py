@@ -24,13 +24,14 @@ token IDs and attention masks, which are then added to the observation dictionar
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.types import EnvTransition, RobotObservation, TransitionKey
 from lerobot.utils.constants import (
     ACTION_TOKEN_MASK,
     ACTION_TOKENS,
@@ -41,6 +42,7 @@ from lerobot.utils.constants import (
 )
 from lerobot.utils.import_utils import _transformers_available
 
+from .core import EnvTransition, RobotObservation, TransitionKey
 from .pipeline import ActionProcessorStep, ObservationProcessorStep, ProcessorStepRegistry
 
 # Conditional import for type checking and lazy loading
@@ -49,6 +51,40 @@ if TYPE_CHECKING or _transformers_available:
 else:
     AutoProcessor = None
     AutoTokenizer = None
+
+
+def _resolve_local_hf_snapshot(model_id: str) -> str | None:
+    """Return a local HF cache snapshot path for a repo id when available."""
+    if os.path.isdir(model_id):
+        return model_id
+
+    if "/" not in model_id:
+        return None
+
+    cache_root = Path(
+        os.environ.get("HUGGINGFACE_HUB_CACHE", Path.home() / ".cache" / "huggingface" / "hub")
+    )
+    repo_cache_dir = cache_root / f"models--{model_id.replace('/', '--')}"
+    if not repo_cache_dir.exists():
+        return None
+
+    refs_main = repo_cache_dir / "refs" / "main"
+    if refs_main.exists():
+        snapshot_name = refs_main.read_text().strip()
+        snapshot_dir = repo_cache_dir / "snapshots" / snapshot_name
+        if snapshot_dir.exists():
+            return str(snapshot_dir)
+
+    snapshots_dir = repo_cache_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return None
+
+    snapshot_dirs = [path for path in snapshots_dir.iterdir() if path.is_dir()]
+    if not snapshot_dirs:
+        return None
+
+    snapshot_dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return str(snapshot_dirs[0])
 
 
 @dataclass
@@ -108,7 +144,8 @@ class TokenizerProcessorStep(ObservationProcessorStep):
         elif self.tokenizer_name is not None:
             if AutoTokenizer is None:
                 raise ImportError("AutoTokenizer is not available")
-            self.input_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+            tokenizer_path = _resolve_local_hf_snapshot(self.tokenizer_name) or self.tokenizer_name
+            self.input_tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         else:
             raise ValueError(
                 "Either 'tokenizer' or 'tokenizer_name' must be provided. "
@@ -376,8 +413,11 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
         elif self.action_tokenizer_name is not None:
             if AutoProcessor is None:
                 raise ImportError("AutoProcessor is not available")
+            action_tokenizer_path = (
+                _resolve_local_hf_snapshot(self.action_tokenizer_name) or self.action_tokenizer_name
+            )
             self.action_tokenizer = AutoProcessor.from_pretrained(
-                self.action_tokenizer_name, trust_remote_code=self.trust_remote_code
+                action_tokenizer_path, trust_remote_code=self.trust_remote_code
             )
         else:
             raise ValueError(
@@ -385,8 +425,11 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
                 "Pass a tokenizer object directly or a tokenizer name to auto-load."
             )
 
+        paligemma_tokenizer_path = (
+            _resolve_local_hf_snapshot(self.paligemma_tokenizer_name) or self.paligemma_tokenizer_name
+        )
         self._paligemma_tokenizer = AutoTokenizer.from_pretrained(
-            self.paligemma_tokenizer_name,
+            paligemma_tokenizer_path,
             trust_remote_code=self.trust_remote_code,
             add_eos_token=True,
             add_bos_token=False,

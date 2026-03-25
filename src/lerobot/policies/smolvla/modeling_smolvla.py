@@ -53,6 +53,7 @@ policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
 """
 
 import math
+from dataclasses import replace
 from collections import deque
 from typing import TypedDict, Unpack
 
@@ -68,7 +69,8 @@ from lerobot.policies.utils import (
     populate_queues,
 )
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
-from lerobot.utils.device_utils import get_safe_dtype
+from lerobot.utils.utils import get_safe_dtype
+from lerobot.configs.policies import PreTrainedConfig
 
 
 class ActionSelectKwargs(TypedDict, total=False):
@@ -244,6 +246,16 @@ class SmolVLAPolicy(PreTrainedPolicy):
         self.init_rtc_processor()
         self.model = VLAFlowMatching(config, rtc_processor=self.rtc_processor)
         self.reset()
+
+    @classmethod
+    def from_pretrained(cls, pretrained_name_or_path, *, config=None, **kwargs):
+        if config is None:
+            config = PreTrainedConfig.from_pretrained(pretrained_name_or_path, **kwargs)
+        if config.load_vlm_weights:
+            # The serialized SmolVLA checkpoint already contains the full backbone weights.
+            # Avoid re-downloading the VLM during module construction before safetensors are loaded.
+            config = replace(config, load_vlm_weights=False)
+        return super().from_pretrained(pretrained_name_or_path, config=config, **kwargs)
 
     def reset(self):
         """This should be called whenever the environment is reset."""
@@ -559,6 +571,7 @@ class VLAFlowMatching(nn.Module):
 
         self.vlm_with_expert = SmolVLMWithExpertModel(
             model_id=self.config.vlm_model_name,
+            local_files_only=getattr(self.config, "local_files_only", False),
             freeze_vision_encoder=self.config.freeze_vision_encoder,
             train_expert_only=self.config.train_expert_only,
             load_vlm_weights=self.config.load_vlm_weights,
