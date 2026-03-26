@@ -541,9 +541,9 @@ def lerobot_dataset_factory(
             episodes=episodes_metadata,
         )
         with (
-            patch("lerobot.datasets.lerobot_dataset.LeRobotDatasetMetadata") as mock_metadata_patch,
-            patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version_patch,
-            patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download_patch,
+            patch("lerobot.datasets.dataset_metadata.LeRobotDatasetMetadata") as mock_metadata_patch,
+            patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version_patch,
+            patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download_patch,
         ):
             mock_metadata_patch.return_value = mock_metadata
             mock_get_safe_version_patch.side_effect = lambda repo_id, version: version
