@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from pprint import pformat
+from threading import Event
 from typing import Protocol
 
 import draccus
@@ -33,6 +34,7 @@ from lerobot.robots import Robot, RobotConfig, make_robot_from_config, so_follow
 from lerobot.utils.utils import init_logging
 
 logger = logging.getLogger(__name__)
+_CALIBRATION_PAUSED = Event()
 
 SERVO_RESOLUTION = 4096
 DEFAULT_CALIBRATION_ORDER = (
@@ -126,6 +128,59 @@ class AutoCalibrateConfig:
     position_tolerance: int = 4000
 
     OVER_LOAD_BIT = 0x20
+
+
+def set_calibration_paused(paused: bool):
+    """Pause or resume the current calibration workflow."""
+
+    if paused:
+        _CALIBRATION_PAUSED.set()
+    else:
+        _CALIBRATION_PAUSED.clear()
+
+
+def is_calibration_paused() -> bool:
+    """Return whether calibration is currently paused."""
+
+    return _CALIBRATION_PAUSED.is_set()
+
+
+def wait_if_calibration_paused(
+    bus: FeetechMotorsBus | None = None,
+    motor_name: str | None = None,
+    resume_velocity: int | None = None,
+):
+    """Block while calibration is paused and safely stop motor motion if needed."""
+
+    if not is_calibration_paused():
+        return
+
+    if bus is not None and motor_name is not None and resume_velocity is not None:
+        bus.write("Goal_Velocity", motor_name, 0, normalize=False)
+
+    logger.info("Calibration paused.")
+    while is_calibration_paused():
+        time.sleep(0.1)
+    logger.info("Calibration resumed.")
+
+    if bus is not None and motor_name is not None and resume_velocity is not None:
+        bus.write("Goal_Velocity", motor_name, resume_velocity, normalize=False)
+
+
+def sleep_with_pause(
+    duration_s: float,
+    bus: FeetechMotorsBus | None = None,
+    motor_name: str | None = None,
+    resume_velocity: int | None = None,
+):
+    """Sleep in small intervals so calibration can be paused responsively."""
+
+    remaining = max(duration_s, 0.0)
+    while remaining > 0:
+        wait_if_calibration_paused(bus, motor_name, resume_velocity)
+        chunk = min(0.05, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
 
 
 def normalize_homing_offset(offset: int, bits: int = 11) -> int:
@@ -309,7 +364,7 @@ def explore_literal_limit(
     bus.write("Goal_Velocity", motor_name, goal_velocity, normalize=False)
 
     while True:
-        time.sleep(config.wait_time_s)
+        sleep_with_pause(config.wait_time_s, bus, motor_name, goal_velocity)
 
         try:
             current_position = bus.read("Present_Position", motor_name, normalize=False)
@@ -319,7 +374,7 @@ def explore_literal_limit(
                 while True:
                     try:
                         bus.write("Torque_Limit", motor_name, 0, normalize=False)
-                        time.sleep(0.2)
+                        sleep_with_pause(0.2, bus, motor_name, 0)
                     except RuntimeError:
                         continue
                     break
@@ -422,6 +477,12 @@ def move_motor_to_midpoint(
     previous_position = bus.read("Present_Position", motor_name, normalize=False)
     moved_offset = 0
     while True:
+        wait_if_calibration_paused(
+            bus,
+            motor_name,
+            behavior.midpoint_velocity_sign * config.explore_velocity,
+        )
+
         if behavior.stop_midpoint_motion_immediately:
             bus.write("Goal_Velocity", motor_name, 0, normalize=False)
             break
@@ -571,16 +632,18 @@ def auto_calibrate_robot(
 
     for motor_name in plan.ordered_motors:
         try:
+            wait_if_calibration_paused()
             run_matching_actions(bus, motor_name, plan.pre_actions, config)
             calibration = auto_calibrate_single_joint(bus, motor_name, config)
             calibration_dict[motor_name] = calibration
-            time.sleep(1.0)
+            sleep_with_pause(1.0)
         except Exception as error:
             logger.error(f"Failed while calibrating motor {motor_name}: {error}")
             raise
 
     for motor_name in plan.recovery_order:
         try:
+            wait_if_calibration_paused()
             run_matching_actions(bus, motor_name, plan.post_actions, config)
         except Exception as error:
             logger.error(f"Failed while recovering motor {motor_name}: {error}")
@@ -598,6 +661,7 @@ def auto_calibrate_connected_device(
 ) -> AutoCalibrateResult:
     """Run calibration on an already connected device and optionally save the result."""
 
+    set_calibration_paused(False)
     calibration_dict = auto_calibrate_robot(device, config)
     saved_path: Path | None = None
 
