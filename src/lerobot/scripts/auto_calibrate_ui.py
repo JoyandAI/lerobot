@@ -14,6 +14,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+SRC_ROOT = Path(__file__).resolve().parents[2]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
 from serial.tools import list_ports
 
 from lerobot.motors import auto_calibrate as auto_calibrate_module
@@ -22,6 +26,7 @@ from lerobot.robots import make_robot_from_config, so101_follower  # noqa: F401
 from lerobot.robots.so101_follower import SO101FollowerConfig
 from lerobot.teleoperators import make_teleoperator_from_config, so101_leader  # noqa: F401
 from lerobot.teleoperators.so101_leader import SO101LeaderConfig
+from lerobot.motors.workflow_services import detect_soarm_device_type
 
 try:
     from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal
@@ -125,11 +130,34 @@ STATUS_PAUSED = "标定已暂停"
 STATUS_FINISHED = "标定完毕，请拔掉USB"
 STATUS_FAILED = "标定失败"
 STATUS_AUTHORIZING = "端口授权中"
+STATUS_DETECTING = "设备识别中"
 STATUS_CHECKING_ARM = "机械臂检测中"
 
 ACTIVE_STATUSES = {STATUS_IDLE, STATUS_PORT_DETECTED}
-BUSY_STATUSES = {STATUS_CALIBRATING, STATUS_PAUSED, STATUS_AUTHORIZING, STATUS_CHECKING_ARM}
+BUSY_STATUSES = {STATUS_CALIBRATING, STATUS_PAUSED, STATUS_AUTHORIZING, STATUS_DETECTING, STATUS_CHECKING_ARM}
 TERMINAL_STATUSES = {STATUS_FINISHED, STATUS_FAILED}
+
+DETECTED_DEVICE_TYPE_TO_UI_TYPE = {
+    "so101_leader": "tele",
+    "so101_follower": "robot",
+    "leader": "tele",
+    "follower": "robot",
+    "tele": "tele",
+    "robot": "robot",
+}
+
+DEVICE_TYPE_LABELS = {
+    "tele": "leader",
+    "robot": "follower",
+}
+
+
+def detect_ui_device_type(port: str) -> str:
+    detected_type = detect_soarm_device_type(port)
+    try:
+        return DETECTED_DEVICE_TYPE_TO_UI_TYPE[detected_type]
+    except KeyError as exc:
+        raise RuntimeError(f"Unsupported detected soarm device type: {detected_type}") from exc
 
 
 @dataclass(frozen=True)
@@ -199,16 +227,19 @@ class WorkerBase(QObject):
 
 
 class CalibrationWorker(WorkerBase):
-    def __init__(self, device_type: str, port: str, filename: str):
+    def __init__(self, port: str, filename: str):
         super().__init__()
-        self.device_type = device_type
+        self.device_type: str | None = None
         self.port = port
         self.filename = filename
 
     def run(self):
         device = None
         try:
-            self.status_changed.emit(STATUS_CALIBRATING, f"正在连接 {self.port} 并开始标定。")
+            self.status_changed.emit(STATUS_DETECTING, f"正在识别 {self.port} 的 leader/follower 类型。")
+            self.device_type = detect_ui_device_type(self.port)
+            device_label = DEVICE_TYPE_LABELS[self.device_type]
+            self.status_changed.emit(STATUS_CALIBRATING, f"已识别为 {device_label}，正在连接并开始标定。")
             config_kwargs = {
                 "port": self.port,
                 "id": Path(self.filename).stem or "my_so101",
@@ -283,15 +314,18 @@ class LinuxPermissionWorker(WorkerBase):
 
 
 class ArmCheckWorker(WorkerBase):
-    def __init__(self, device_type: str, port: str):
+    def __init__(self, port: str):
         super().__init__()
-        self.device_type = device_type
+        self.device_type: str | None = None
         self.port = port
 
     def run(self):
         device = None
         try:
-            self.status_changed.emit(STATUS_CHECKING_ARM, f"正在检测机械臂，端口：{self.port}")
+            self.status_changed.emit(STATUS_DETECTING, f"正在识别 {self.port} 的 leader/follower 类型。")
+            self.device_type = detect_ui_device_type(self.port)
+            device_label = DEVICE_TYPE_LABELS[self.device_type]
+            self.status_changed.emit(STATUS_CHECKING_ARM, f"已识别为 {device_label}，正在检测机械臂。")
             device_config = DEVICE_CONFIG_FACTORIES[self.device_type](port=self.port, id="arm_check")
             device = DEVICE_FACTORIES[self.device_type](device_config)
             device.connect(calibrate=False)
@@ -364,6 +398,14 @@ class ArmCheckWorker(WorkerBase):
                 bus.write("Torque_Enable", motor_name, original_torque_enable, normalize=False)
 
 
+def classify_worker_failure(worker: WorkerBase | None) -> tuple[str, str]:
+    if isinstance(worker, LinuxPermissionWorker):
+        return "端口授权失败", "端口授权失败"
+    if isinstance(worker, ArmCheckWorker):
+        return "机械臂检测失败", "机械臂检测失败"
+    return "标定失败", "标定失败"
+
+
 class AutoCalibrateWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -421,10 +463,8 @@ class AutoCalibrateWindow(QMainWindow):
         config_layout.setHorizontalSpacing(14)
         config_layout.setVerticalSpacing(14)
 
-        self.device_type_combo = QComboBox()
-        self.device_type_combo.addItem("tele", "tele")
-        self.device_type_combo.addItem("robot", "robot")
-        self.device_type_combo.currentIndexChanged.connect(self.on_device_type_changed)
+        self.device_type_value_label = QLabel("自动识别 leader / follower")
+        self.device_type_value_label.setObjectName("hintLabel")
 
         self.port_combo = QComboBox()
         self.port_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -435,14 +475,14 @@ class AutoCalibrateWindow(QMainWindow):
         self.refresh_button.clicked.connect(self.refresh_ports)
 
         self.filename_input = QLineEdit("my_so101")
-        self.filename_input.setPlaceholderText("例如：tele_calibration 或 robot_01.json")
+        self.filename_input.setPlaceholderText("例如：my_so101 或 arm_01.json")
         self.filename_input.textChanged.connect(self.on_filename_changed)
 
-        filename_hint = QLabel("只修改文件名，不修改保存目录。最终仍保存到设备默认 calibration 路径。")
+        filename_hint = QLabel("设备类型会在开始后自动识别；只修改文件名，不修改保存目录。")
         filename_hint.setObjectName("hintLabel")
 
         config_layout.addWidget(QLabel("设备类型"), 0, 0)
-        config_layout.addWidget(self.device_type_combo, 0, 1, 1, 2)
+        config_layout.addWidget(self.device_type_value_label, 0, 1, 1, 2)
         config_layout.addWidget(QLabel("串口"), 1, 0)
         config_layout.addWidget(self.port_combo, 1, 1)
         config_layout.addWidget(self.refresh_button, 1, 2)
@@ -684,18 +724,12 @@ class AutoCalibrateWindow(QMainWindow):
             STATUS_FINISHED: "#0f766e",
             STATUS_FAILED: "#b42318",
             STATUS_AUTHORIZING: "#7c3aed",
+            STATUS_DETECTING: "#2563eb",
             STATUS_CHECKING_ARM: "#2563eb",
         }
         self.status_badge.setStyleSheet(f"color: {QColor(color_map.get(status, '#173f35')).name()};")
 
     def on_device_type_changed(self):
-        suggested_name = "tele_calibration" if self.selected_device_type() == "tele" else "robot_calibration"
-        if not self.filename_input.text().strip() or self.filename_input.text() in {
-            "my_so101",
-            "tele_calibration",
-            "robot_calibration",
-        }:
-            self.filename_input.setText(suggested_name)
         self.update_output_preview()
         self.update_action_buttons()
 
@@ -754,7 +788,7 @@ class AutoCalibrateWindow(QMainWindow):
         self.update_action_buttons()
 
     def selected_device_type(self) -> str:
-        return self.device_type_combo.currentData() or "tele"
+        return "auto"
 
     def selected_port(self) -> str:
         return self.port_combo.currentData() or ""
@@ -766,18 +800,7 @@ class AutoCalibrateWindow(QMainWindow):
         return text if text.lower().endswith(".json") else f"{text}.json"
 
     def resolve_output_path_preview(self) -> Path | None:
-        filename = self.normalized_filename()
-        port = self.selected_port()
-        if not filename or not port:
-            return None
-
-        try:
-            device_type = self.selected_device_type()
-            device_config = DEVICE_CONFIG_FACTORIES[device_type](port=port, id=Path(filename).stem or "my_so101")
-            device = DEVICE_FACTORIES[device_type](device_config)
-            return Path(device.calibration_fpath).with_name(filename)
-        except Exception:
-            return None
+        return None
 
     def update_output_preview(self):
         filename = self.normalized_filename()
@@ -795,7 +818,7 @@ class AutoCalibrateWindow(QMainWindow):
             self.output_hint_label.setText(f"输出路径：{preview_path}")
             return
 
-        self.output_hint_label.setText(f"输出路径：{filename} | 连接设备后可显示完整保存位置")
+        self.output_hint_label.setText(f"输出路径：{filename} | 标定时自动识别设备类型后保存")
 
     def can_start_calibration(self) -> bool:
         return bool(self.selected_port() and self.filename_input.text().strip())
@@ -830,7 +853,6 @@ class AutoCalibrateWindow(QMainWindow):
         self.recalibrate_button.setEnabled(ready and not is_busy and self.current_status in TERMINAL_STATUSES)
         self.arm_check_button.setEnabled(bool(self.selected_port()) and not is_busy)
         self.refresh_button.setEnabled(not is_busy)
-        self.device_type_combo.setEnabled(not is_busy)
         self.port_combo.setEnabled(not is_busy)
         self.filename_input.setEnabled(not is_busy)
         if IS_LINUX:
@@ -838,20 +860,19 @@ class AutoCalibrateWindow(QMainWindow):
 
     def start_calibration(self):
         if not self.can_start_calibration():
-            QMessageBox.warning(self, "输入不完整", "请选择设备类型、串口，并填写输出文件名。")
+            QMessageBox.warning(self, "输入不完整", "请选择串口，并填写输出文件名。")
             return
 
         selected_port = self.selected_port()
-        selected_type = self.selected_device_type()
         filename = self.filename_input.text().strip()
 
         set_calibration_paused(False)
         self.append_log("")
         self.append_log("=" * 72)
         self.append_log(
-            f"准备开始标定 | device_type={selected_type} | port={selected_port} | file={filename}"
+            f"准备开始标定 | device_type=auto | port={selected_port} | file={filename}"
         )
-        self.start_worker(CalibrationWorker(selected_type, selected_port, filename))
+        self.start_worker(CalibrationWorker(selected_port, filename))
 
     def toggle_pause_calibration(self):
         if not self.has_running_calibration():
@@ -878,8 +899,8 @@ class AutoCalibrateWindow(QMainWindow):
 
         self.append_log("")
         self.append_log("=" * 72)
-        self.append_log(f"准备检测机械臂 | device_type={self.selected_device_type()} | port={selected_port}")
-        self.start_worker(ArmCheckWorker(self.selected_device_type(), selected_port))
+        self.append_log(f"准备检测机械臂 | device_type=auto | port={selected_port}")
+        self.start_worker(ArmCheckWorker(selected_port))
 
     def grant_linux_permissions(self):
         if not IS_LINUX:
