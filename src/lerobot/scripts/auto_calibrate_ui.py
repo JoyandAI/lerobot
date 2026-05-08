@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import glob
+import inspect
 import logging
 import os
 import subprocess
@@ -15,14 +16,7 @@ from pathlib import Path
 
 from serial.tools import list_ports
 
-from lerobot.motors.auto_calibrate import (
-    AutoCalibrateConfig,
-    auto_calibrate_connected_device,
-    explore_literal_limit,
-    get_joint_behavior,
-    is_calibration_paused,
-    set_calibration_paused,
-)
+from lerobot.motors import auto_calibrate as auto_calibrate_module
 from lerobot.motors.feetech import OperatingMode
 from lerobot.robots import make_robot_from_config, so_follower  # noqa: F401
 from lerobot.robots.so_follower import SO101FollowerConfig
@@ -78,6 +72,13 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+AutoCalibrateConfig = auto_calibrate_module.AutoCalibrateConfig
+auto_calibrate_connected_device = auto_calibrate_module.auto_calibrate_connected_device
+explore_literal_limit = auto_calibrate_module.explore_literal_limit
+get_joint_behavior = auto_calibrate_module.get_joint_behavior
+is_calibration_paused = getattr(auto_calibrate_module, "is_calibration_paused", lambda: False)
+set_calibration_paused = getattr(auto_calibrate_module, "set_calibration_paused", lambda paused: None)
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_LINUX = sys.platform.startswith("linux")
@@ -154,6 +155,42 @@ class QtLogHandler(logging.Handler):
         self.emitter.message_emitted.emit(self.format(record))
 
 
+def run_auto_calibration_for_ui(device, config: AutoCalibrateConfig, output_path: Path) -> Path:
+    """Run auto calibration across old/new helper signatures and return the saved file path."""
+
+    calibration_func = auto_calibrate_connected_device
+    save_calibration_to_file = getattr(auto_calibrate_module, "save_calibration_to_file", None)
+
+    try:
+        parameters = inspect.signature(calibration_func).parameters
+    except (TypeError, ValueError):
+        parameters = {"calibration_path": None}
+
+    if "calibration_path" in parameters:
+        result = calibration_func(device, config, calibration_path=output_path)
+    elif "save" in parameters:
+        result = calibration_func(device, config, save=False)
+    else:
+        result = calibration_func(device, config)
+
+    saved_path = getattr(result, "calibration_path", None)
+    calibration_dict = getattr(result, "calibration_dict", None)
+    if calibration_dict is None and isinstance(result, dict):
+        calibration_dict = result
+
+    if saved_path is not None and Path(saved_path) == output_path:
+        return output_path
+
+    if calibration_dict is not None and save_calibration_to_file is not None:
+        save_calibration_to_file(calibration_dict, output_path)
+        return output_path
+
+    if saved_path is not None:
+        return Path(saved_path)
+
+    return output_path
+
+
 class WorkerBase(QObject):
     finished = Signal()
     succeeded = Signal(str)
@@ -186,13 +223,7 @@ class CalibrationWorker(WorkerBase):
             device.connect(calibrate=False)
 
             output_path = Path(device.calibration_fpath).with_name(self.ensure_json_suffix(self.filename))
-            result = auto_calibrate_connected_device(
-                device,
-                auto_calib_config,
-                calibration_path=output_path,
-            )
-
-            final_path = result.calibration_path or output_path
+            final_path = run_auto_calibration_for_ui(device, auto_calib_config, output_path)
             self.status_changed.emit(STATUS_FINISHED, f"标定完成，文件已保存到：{final_path}")
             self.succeeded.emit(str(final_path))
         except Exception as error:

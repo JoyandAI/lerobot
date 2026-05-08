@@ -120,10 +120,13 @@ class AutoCalibrateConfig:
 
     robot: RobotConfig
     try_torque: int = 400
-    max_torque: int = 500
+    max_torque: int = 600
+    wrist_roll_torque_limit: int = 300
+    gripper_torque_limit: int = 300
+    shoulder_pan_midpoint_adjustment: int = -150
     torque_step: int = 50
     explore_velocity: int = 600
-    wait_time_s: float = 0.5
+    wait_time_s: float = 0.3
     velocity_threshold: int = 4
     position_tolerance: int = 4000
 
@@ -220,6 +223,20 @@ def fold_unwrapped_range_to_single_turn(
     return range_min, range_max, offset
 
 
+def unwrap_physical_limit_range(
+    first_limit: int,
+    second_limit: int,
+    second_direction: Direction,
+    resolution: int,
+) -> tuple[int, int]:
+    """Represent the two physical limits as one increasing unwrapped range."""
+
+    if second_direction == Direction.CLOCKWISE:
+        return first_limit, first_limit + ((second_limit - first_limit + resolution) % resolution)
+
+    return second_limit, second_limit + ((first_limit - second_limit + resolution) % resolution)
+
+
 def compute_directional_offset(
     previous_position: int,
     current_position: int,
@@ -265,7 +282,7 @@ def get_joint_behavior(motor_name: str) -> JointCalibrationBehavior:
             first_direction=behavior.first_direction,
             second_direction=behavior.second_direction,
             midpoint_velocity_sign=behavior.midpoint_velocity_sign,
-            midpoint_half_offset_adjustment=-150,
+            midpoint_half_offset_adjustment=behavior.midpoint_half_offset_adjustment,
             use_closed_position_as_center=behavior.use_closed_position_as_center,
             stop_midpoint_motion_immediately=behavior.stop_midpoint_motion_immediately,
         )
@@ -339,6 +356,33 @@ def run_matching_actions(
             run_motor_actions(bus, actions, config)
 
 
+def stop_motor_motion(bus: FeetechMotorsBus, motor_name: str):
+    """Best-effort stop used around calibration phase boundaries."""
+
+    try:
+        bus.write("Goal_Velocity", motor_name, 0, normalize=False)
+        if "wrist_roll" in motor_name:
+            bus.write("Torque_Enable", motor_name, 0, normalize=False)
+    except Exception:
+        logger.exception("Failed to stop motor velocity for %s", motor_name)
+
+
+def get_motor_torque_limit(motor_name: str, config: AutoCalibrateConfig) -> int:
+    if "wrist_roll" in motor_name:
+        return config.wrist_roll_torque_limit
+    if "gripper" in motor_name:
+        return config.gripper_torque_limit
+    return config.try_torque
+
+
+def get_motor_max_torque_limit(motor_name: str, config: AutoCalibrateConfig) -> int:
+    if "wrist_roll" in motor_name:
+        return config.wrist_roll_torque_limit
+    if "gripper" in motor_name:
+        return config.gripper_torque_limit
+    return config.max_torque
+
+
 def explore_literal_limit(
     bus: FeetechMotorsBus,
     motor_name: str,
@@ -350,7 +394,8 @@ def explore_literal_limit(
     logger.info(f"Exploring {motor_name} {direction.value} limit...")
 
     resolution = SERVO_RESOLUTION
-    current_torque = config.try_torque
+    current_torque = get_motor_torque_limit(motor_name, config)
+    motor_max_torque = get_motor_max_torque_limit(motor_name, config)
     previous_position = bus.read("Present_Position", motor_name, normalize=False)
     start_position = previous_position
     limit_position = previous_position
@@ -400,8 +445,8 @@ def explore_literal_limit(
                 logger.info(f"Velocity near zero and position stable. Limit found at {current_position}.")
                 break
 
-            if current_torque < config.max_torque:
-                current_torque = min(current_torque + config.torque_step, config.max_torque)
+            if current_torque < motor_max_torque:
+                current_torque = min(current_torque + config.torque_step, motor_max_torque)
                 bus.write("Torque_Limit", motor_name, current_torque, normalize=False)
         else:
             still_count = 0
@@ -415,7 +460,7 @@ def explore_literal_limit(
 
     total_offset = compute_directional_offset(start_position, current_position, direction, resolution)
 
-    bus.write("Goal_Velocity", motor_name, 0, normalize=False)
+    stop_motor_motion(bus, motor_name)
     return total_offset, limit_position
 
 
@@ -466,7 +511,8 @@ def move_motor_to_midpoint(
     logger.info("Step 4: moving toward midpoint...")
 
     bus.write("Operating_Mode", motor_name, OperatingMode.VELOCITY.value, normalize=False)
-    bus.write("Torque_Limit", motor_name, config.try_torque, normalize=False)
+    bus.write("Torque_Limit", motor_name, get_motor_torque_limit(motor_name, config), normalize=False)
+    bus.write("Torque_Enable", motor_name, 1, normalize=False)
     bus.write(
         "Goal_Velocity",
         motor_name,
@@ -484,12 +530,12 @@ def move_motor_to_midpoint(
         )
 
         if behavior.stop_midpoint_motion_immediately:
-            bus.write("Goal_Velocity", motor_name, 0, normalize=False)
+            stop_motor_motion(bus, motor_name)
             break
 
         current_position = bus.read("Present_Position", motor_name, normalize=False)
         if moved_offset >= half_offset:
-            bus.write("Goal_Velocity", motor_name, 0, normalize=False)
+            stop_motor_motion(bus, motor_name)
             break
 
         delta = (current_position - previous_position + SERVO_RESOLUTION) % SERVO_RESOLUTION
@@ -499,7 +545,7 @@ def move_motor_to_midpoint(
 
         moved_offset += delta
         previous_position = current_position
-
+    stop_motor_motion(bus, motor_name)
     actual_midpoint = bus.read("Present_Position", motor_name, normalize=False)
     logger.info(f"Actual midpoint position: logical={actual_midpoint}, physical={actual_midpoint}")
     return actual_midpoint
@@ -518,9 +564,11 @@ def auto_calibrate_single_joint(
     motor = bus.motors[motor_name]
     model = motor.model
     max_position = bus.model_resolution_table[model] - 1
+    motor_try_torque = get_motor_torque_limit(motor_name, config)
+    motor_max_torque = get_motor_max_torque_limit(motor_name, config)
 
-    bus.write("Max_Torque_Limit", motor_name, config.max_torque, normalize=False)
-    bus.write("Overload_Torque", motor_name, int(config.try_torque * 95 / config.max_torque), normalize=False)
+    bus.write("Max_Torque_Limit", motor_name, motor_max_torque, normalize=False)
+    bus.write("Overload_Torque", motor_name, int(motor_try_torque * 95 / motor_max_torque), normalize=False)
     bus.write("Min_Position_Limit", motor_name, 0, normalize=False)
     bus.write("Max_Position_Limit", motor_name, max_position, normalize=False)
 
@@ -536,35 +584,75 @@ def auto_calibrate_single_joint(
     logger.info(f"After resetting offset: logical={current_present}, physical={current_present}, offset=0")
 
     behavior = get_joint_behavior(motor_name)
+    if "shoulder_pan" in motor_name:
+        behavior = JointCalibrationBehavior(
+            first_direction=behavior.first_direction,
+            second_direction=behavior.second_direction,
+            midpoint_velocity_sign=behavior.midpoint_velocity_sign,
+            midpoint_half_offset_adjustment=config.shoulder_pan_midpoint_adjustment,
+            use_closed_position_as_center=behavior.use_closed_position_as_center,
+            stop_midpoint_motion_immediately=behavior.stop_midpoint_motion_immediately,
+        )
     limit_result = run_limit_exploration_sequence(bus, motor_name, config, behavior)
+    stop_motor_motion(bus, motor_name)
 
-    total_offset = limit_result.second_offset
+    use_physical_limit_range = motor.id in {1, 2, 3, 4, 5, 6}
+    if use_physical_limit_range:
+        physical_range_min, physical_range_max = unwrap_physical_limit_range(
+            limit_result.first_limit,
+            limit_result.second_limit,
+            behavior.second_direction,
+            SERVO_RESOLUTION,
+        )
+        total_offset = physical_range_max - physical_range_min
+        logger.info(
+            "Using physical limit range: "
+            f"motor_id={motor.id}, motor_name={motor_name}, "
+            f"first_limit={limit_result.first_limit}, second_limit={limit_result.second_limit}, "
+            f"unwrapped_range=[{physical_range_min}, {physical_range_max}]"
+        )
+    else:
+        total_offset = limit_result.second_offset
+
     half_offset = total_offset // 2
     half_offset += behavior.midpoint_half_offset_adjustment
 
     logger.info(f"\nStep 3: total offset: {total_offset}")
-    if not behavior.use_closed_position_as_center:
-        move_motor_to_midpoint(bus, motor_name, config, behavior, half_offset)
-    else:
-        logger.info("Step 3: gripper uses the closed position as the logical center and skips midpoint motion.")
-        actual_mid_physical = bus.read("Present_Position", motor_name, normalize=False)
+    if behavior.use_closed_position_as_center:
+        logger.info("Step 3: gripper maps physical open/closed limits directly and skips midpoint motion.")
+        actual_mid_physical = limit_result.first_limit
         logger.info(
             f"Gripper closed position: logical={limit_result.first_limit}, physical={actual_mid_physical}"
         )
+    else:
+        move_motor_to_midpoint(bus, motor_name, config, behavior, half_offset)
+    stop_motor_motion(bus, motor_name)
 
     target_center = max_position // 2
 
-    if not behavior.use_closed_position_as_center:
+    if behavior.use_closed_position_as_center:
+        raw_middle_offset = physical_range_min
+        ideal_offset = normalize_homing_offset(raw_middle_offset)
+        ideal_range_min = 0
+        ideal_range_max = total_offset
+        logger.info(
+            "Step 5: gripper logical range maps open to 0 and closed to 100: "
+            f"open_physical={physical_range_min}, closed_physical={physical_range_max}"
+        )
+    elif use_physical_limit_range:
+        physical_mid_unwrapped = physical_range_min + half_offset
+        actual_mid_physical = physical_mid_unwrapped % SERVO_RESOLUTION
+        raw_middle_offset = physical_mid_unwrapped - target_center
+        ideal_offset = normalize_homing_offset(raw_middle_offset)
+        ideal_range_min = target_center - half_offset
+        ideal_range_max = target_center + (total_offset - half_offset)
+    else:
         physical_mid_unwrapped = limit_result.second_limit + half_offset
         actual_mid_physical = physical_mid_unwrapped % SERVO_RESOLUTION
         raw_middle_offset = physical_mid_unwrapped - target_center
-    else:
-        raw_middle_offset = actual_mid_physical - target_center
-
-    ideal_offset = normalize_homing_offset(raw_middle_offset)
-
-    ideal_range_min = target_center - half_offset
-    ideal_range_max = target_center + (total_offset - half_offset)
+        ideal_offset = normalize_homing_offset(raw_middle_offset)
+        ideal_range_min = target_center - half_offset
+        ideal_range_max = target_center + (total_offset - half_offset)
 
     ideal_range_min, ideal_range_max, ideal_offset = fold_unwrapped_range_to_single_turn(
         ideal_range_min,
@@ -584,10 +672,6 @@ def auto_calibrate_single_joint(
     logger.info(f"Step 5: final homing offset = {ideal_offset}")
     logger.info(f"Step 6: logical range = [{ideal_range_min}, {ideal_range_max}]")
 
-    bus.write("Homing_Offset", motor_name, ideal_offset, normalize=False)
-    bus.write("Min_Position_Limit", motor_name, ideal_range_min, normalize=False)
-    bus.write("Max_Position_Limit", motor_name, ideal_range_max, normalize=False)
-
     calibration = MotorCalibration(
         id=motor.id,
         drive_mode=0,
@@ -600,6 +684,7 @@ def auto_calibrate_single_joint(
     bus.write("Protective_Torque", motor_name, 20, normalize=False)
     bus.write("Protection_Time", motor_name, 200, normalize=False)
     bus.write("Overload_Torque", motor_name, 80, normalize=False)
+    stop_motor_motion(bus, motor_name)
 
     logger.info("\nCalibration complete.")
     logger.info(f"  Motor ID: {motor.id}")
@@ -648,6 +733,10 @@ def auto_calibrate_robot(
         except Exception as error:
             logger.error(f"Failed while recovering motor {motor_name}: {error}")
             raise
+
+    logger.info("All joints recovered. Releasing torque before writing calibration registers.")
+    bus.disable_torque(list(plan.recovery_order))
+    bus.write_calibration(calibration_dict)
 
     return calibration_dict
 

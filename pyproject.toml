@@ -231,6 +231,7 @@ lerobot-find-joint-limits="lerobot.scripts.lerobot_find_joint_limits:main"
 lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
+lerobot-auto-calibrate="lerobot.motors.auto_calibrate:main"
 lerobot-auto-calibrate-ui="lerobot.scripts.auto_calibrate_ui:main"
 
 # ---------------- Tool Configurations ----------------
