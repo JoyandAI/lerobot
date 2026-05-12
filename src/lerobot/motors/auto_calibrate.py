@@ -756,7 +756,6 @@ def auto_calibrate_connected_device(
 ) -> AutoCalibrateResult:
     """Run calibration on an already connected device and optionally save the result."""
 
-    set_calibration_paused(False)
     calibration_dict = auto_calibrate_robot(device, config)
     saved_path: Path | None = None
 
@@ -799,6 +798,7 @@ def auto_calibrate(cfg: AutoCalibrateConfig):
     init_logging()
     logger.info("Starting auto calibration.")
     logger.info(pformat(asdict(cfg)))
+    set_calibration_paused(False)
 
     robot = make_robot_from_config(cfg.robot)
     robot.connect(calibrate=False)

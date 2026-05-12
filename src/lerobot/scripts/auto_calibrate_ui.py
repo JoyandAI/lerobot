@@ -113,10 +113,10 @@ AUTO_CALIBRATION_DEFAULTS = {
         "position_tolerance": 4000,
     },
     "robot": {
-        "try_torque": 600,
-        "max_torque": 1000,
+        "try_torque": 500,
+        "max_torque": 600,
         "torque_step": 50,
-        "explore_velocity": 800,
+        "explore_velocity": 600,
         "wait_time_s": 0.5,
         "velocity_threshold": 4,
         "position_tolerance": 4000,
