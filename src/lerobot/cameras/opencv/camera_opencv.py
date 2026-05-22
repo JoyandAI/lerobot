@@ -118,7 +118,10 @@ class OpenCVCamera(Camera):
         self.warmup_s = config.warmup_s
 
         self.videocapture: cv2.VideoCapture | None = None
-        self.fourcc: cv2.VideoWriter_fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+        if config.fourcc is not None:
+            self.fourcc: cv2.VideoWriter_fourcc = cv2.VideoWriter_fourcc(*config.fourcc)
+        else:
+            self.fourcc: cv2.VideoWriter_fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
@@ -241,28 +244,6 @@ class OpenCVCamera(Camera):
         if not success or not math.isclose(self.fps, actual_fps, rel_tol=1e-3):
             raise RuntimeError(f"{self} failed to set fps={self.fps} ({actual_fps=}).")
 
-    def _validate_fourcc(self) -> None:
-        if self.videocapture is None:
-            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
-
-        # Windows: MJPG  YUY2
-        fourcc_candidates = ["MJPG", "YUY2"]
-
-        for fourcc in fourcc_candidates:
-            fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
-            success = self.videocapture.set(cv2.CAP_PROP_FOURCC, fourcc_code)
-
-            if success:
-                logger.info(f"{self} set FOURCC={fourcc}")
-                self.config.fourcc = fourcc
-                return
-
-            logger.warning(f"{self} failed to set FOURCC={fourcc}, trying next...")
-
-        logger.warning(
-            f"{self} failed to set any preferred FOURCC "
-            f"(tried {fourcc_candidates}), using backend default."
-        )
 
 
     def _validate_width_and_height(self) -> None:
@@ -290,12 +271,41 @@ class OpenCVCamera(Camera):
             )
 
     def _validate_fourcc(self) -> None:
-        """Validates and sets the camera's fourcc codec."""
-        
+        """Validates and sets the camera's fourcc codec.
+
+        Tries the requested FOURCC first, then falls back to auto-detection
+        (MJPG, YUY2) if it fails. If none of the candidates work, uses the
+        camera's backend default.
+        """
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
+
+        # 1) Try the explicitly requested FOURCC from config
         fourcc_succ = self.videocapture.set(cv2.CAP_PROP_FOURCC, self.fourcc)
-        actual_fourcc = self.videocapture.get(cv2.CAP_PROP_FOURCC)
-        if not fourcc_succ or actual_fourcc != self.fourcc:
-            raise RuntimeError(f"{self} failed to set fourcc={self.fourcc} ({actual_fourcc=}, {fourcc_succ=}).")
+        if fourcc_succ:
+            actual_fourcc = self.videocapture.get(cv2.CAP_PROP_FOURCC)
+            logger.info(f"{self} set FOURCC=requested (actual={actual_fourcc!r})")
+            return
+
+        logger.warning(f"{self} failed to set requested FOURCC, falling back to auto-detect...")
+
+        # 2) Fall back to auto-detection: MJPG then YUY2
+        fourcc_candidates = ["MJPG", "YUY2"]
+        for fourcc in fourcc_candidates:
+            fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
+            success = self.videocapture.set(cv2.CAP_PROP_FOURCC, fourcc_code)
+            if success:
+                logger.info(f"{self} set FOURCC={fourcc} (fallback)")
+                self.config.fourcc = fourcc
+                self.fourcc = fourcc_code
+                return
+            logger.warning(f"{self} failed to set FOURCC={fourcc}, trying next...")
+
+        # 3) Nothing worked — use camera backend default
+        logger.warning(
+            f"{self} failed to set any preferred FOURCC "
+            f"(tried requested + {fourcc_candidates}), using backend default."
+        )
 
     @staticmethod
     def find_cameras() -> list[dict[str, Any]]:
