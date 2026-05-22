@@ -206,9 +206,8 @@ class OpenCVCamera(Camera):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"Cannot configure settings for {self} as it is not connected.")
 
-        # Set FOURCC first (if specified) as it can affect available FPS/resolution options
-        if self.config.fourcc is not None:
-            self._validate_fourcc()
+        # Always set FOURCC — self.fourcc defaults to MJPG, critical for USB bandwidth
+        self._validate_fourcc()
         if self.videocapture is None:
             raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
 
@@ -332,6 +331,9 @@ class OpenCVCamera(Camera):
         for target in targets_to_scan:
             camera = cv2.VideoCapture(target)
             if camera.isOpened():
+                # Try MJPG first to reduce USB bandwidth (critical for multi-camera)
+                mjpg_code = cv2.VideoWriter_fourcc(*'MJPG')
+                camera.set(cv2.CAP_PROP_FOURCC, mjpg_code)
                 default_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
                 default_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 default_fps = camera.get(cv2.CAP_PROP_FPS)
