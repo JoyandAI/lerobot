@@ -279,9 +279,11 @@ def build_rollout_context(
     observation_features_hw = {
         k: v
         for k, v in all_obs_features.items()
-        if isinstance(v, tuple) or (v is float and k.endswith(".pos"))
+        if isinstance(v, tuple) or (v is float and (k.endswith(".pos") or k.endswith(".vel")))
     }
-    action_features_hw = {k: v for k, v in robot.action_features.items() if k.endswith(".pos")}
+    action_features_hw = {
+        k: v for k, v in robot.action_features.items() if k.endswith(".pos") or k.endswith(".vel")
+    }
 
     # The action side is always needed: sync inference reads action names from
     # ``dataset_features[ACTION]`` to map policy tensors back to robot actions.
