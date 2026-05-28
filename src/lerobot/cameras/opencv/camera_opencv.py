@@ -106,7 +106,7 @@ class OpenCVCamera(Camera):
 
         self.fps = config.fps
         self.color_mode = config.color_mode
-        self.warmup_s = config.warmup_s
+        self.warmup_s = max(config.warmup_s, 5) if config.warmup_s > 0 else 0
 
         self.videocapture: cv2.VideoCapture | None = None
         if config.fourcc is not None:
@@ -172,9 +172,12 @@ class OpenCVCamera(Camera):
         self._start_read_thread()
 
         if warmup and self.warmup_s > 0:
-            start_time = time.time()
-            while time.time() - start_time < self.warmup_s:
-                self.async_read(timeout_ms=self.warmup_s * 1000)
+            warmup_frames = 0
+            deadline = time.time() + self.warmup_s
+            while time.time() < deadline and warmup_frames < 3:
+                timeout_ms = max((deadline - time.time()) * 1000, 1)
+                self.async_read(timeout_ms=timeout_ms)
+                warmup_frames += 1
                 time.sleep(0.1)
             with self.frame_lock:
                 if self.latest_frame is None:
