@@ -144,12 +144,25 @@ class FeetechMotorsBus(SerialMotorsBus):
 
     def _assert_same_firmware(self) -> None:
         firmware_versions = self._read_firmware_version(self.ids, raise_on_error=True)
-        if len(set(firmware_versions.values())) != 1:
+        versions_by_model = {}
+        for id_, version in firmware_versions.items():
+            versions_by_model.setdefault(self.motors[self._id_to_name(id_)].model, {})[id_] = version
+
+        mismatched_models = {
+            model: versions for model, versions in versions_by_model.items() if len(set(versions.values())) != 1
+        }
+        if mismatched_models:
             raise RuntimeError(
-                "Some Motors use different firmware versions:"
-                f"\n{pformat(firmware_versions)}\n"
-                "Update their firmware first using Feetech's software. "
+                "Some motors with the same model use different firmware versions:"
+                f"\n{pformat(mismatched_models)}\n"
+                "Update motors of the same model first using Feetech's software. "
                 "Visit https://www.feetechrc.com/software."
+            )
+
+        if len(versions_by_model) > 1 and len(set(firmware_versions.values())) != 1:
+            logger.info(
+                "Allowing mixed Feetech firmware versions across different motor models: %s",
+                pformat(versions_by_model),
             )
 
     def _handshake(self) -> None:
@@ -210,7 +223,8 @@ class FeetechMotorsBus(SerialMotorsBus):
         for motor in self.motors:
             # By default, Feetech motors have a 500µs delay response time (corresponding to a value of 250 on
             # the 'Return_Delay_Time' address). We ensure this is reduced to the minimum of 2µs (value of 0).
-            self.write("Return_Delay_Time", motor, return_delay_time)
+            if "Return_Delay_Time" in self.model_ctrl_table[self.motors[motor].model]:
+                self.write("Return_Delay_Time", motor, return_delay_time)
             # Set 'Maximum_Acceleration' to 254 to speedup acceleration and deceleration of the motors.
             if self.protocol_version == 0:
                 self.write("Maximum_Acceleration", motor, maximum_acceleration)
