@@ -258,13 +258,6 @@ def record_loop(
         # Get robot observation
         obs = robot.get_observation()
 
-        if (
-            isinstance(teleop, Teleoperator)
-            and teleop.feedback_features
-            and robot.name != "unitree_g1"
-        ):
-            teleop.send_feedback(obs)
-
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
         obs_processed = robot_observation_processor(obs)
 
