@@ -16,7 +16,7 @@
 
 import time
 
-from lerobot.datasets import LeRobotDataset
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig, LeKiwi, LeKiwiConfig
 from lerobot.utils.constants import ACTION
 from lerobot.utils.robot_utils import precise_sleep

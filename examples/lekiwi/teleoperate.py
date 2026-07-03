@@ -26,14 +26,14 @@ FPS = 30
 
 # Create the robot and teleoperator configurations
 def main():
-    robot_config = LeKiwiClientConfig(remote_ip="192.168.31.165", id="LK12252710") # remote
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.200.52", id="joyandai") # remote
     # robot_config = LeKiwiConfig(port="COM3", id="LK12252710") #local
     
 
     # port in Linux: /dev/ttyACM0, /dev/ttyACM1, etc.
     # port in MacOS: /dev/tty.usbmodemXXXXXXXXXXXX
     # port in Windows: COMX / COMXX
-    teleop_arm_config = SO101LeaderConfig(port="COM69", id="R07252710")
+    teleop_arm_config = SO101LeaderConfig(port="COM10", id="my_so101")
     keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
 
     # Initialize the robot and teleoperator
