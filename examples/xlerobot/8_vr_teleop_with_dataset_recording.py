@@ -25,7 +25,7 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.model.SO101Robot import SO101Kinematics
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.datasets.feature_utils import hw_to_dataset_features, build_dataset_frame
+from lerobot.utils.feature_utils import hw_to_dataset_features, build_dataset_frame
 from lerobot.datasets.image_writer import safe_stop_image_writer
 
 # Setup logging

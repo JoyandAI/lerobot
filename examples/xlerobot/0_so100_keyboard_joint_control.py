@@ -274,7 +274,7 @@ def main():
     
     try:
         # Import necessary modules
-        from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
+        from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
         
         # Get port
