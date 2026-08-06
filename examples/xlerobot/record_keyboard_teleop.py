@@ -402,74 +402,56 @@ def main():
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
 
-    # Connect robot and keyboard
-    robot.connect()
-    keyboard.connect()
+    dataset = None
+    listener = None
 
-    # Create dataset
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        fps=args.fps,
-        features=dataset_features,
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
+    try:
+        # Connect robot and keyboard
+        robot.connect()
+        keyboard.connect()
 
-    # Initialize keyboard listener and visualization
-    listener, events = init_keyboard_listener()
-    if args.display_data:
-        init_rerun(session_name="xlerobot_record")
+        if not robot.is_connected or not keyboard.is_connected:
+            raise ValueError("Robot or keyboard is not connected!")
 
-    if not robot.is_connected or not keyboard.is_connected:
-        raise ValueError("Robot or keyboard is not connected!")
-
-    # Initialize arm and head control
-    obs = robot.get_observation()
-    kin_left = SO101Kinematics()
-    kin_right = SO101Kinematics()
-    left_arm = SimpleTeleopArm(kin_left, LEFT_JOINT_MAP, obs, prefix="left")
-    right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right")
-    head_control = SimpleHeadControl(obs)
-
-    print("Starting recording loop...")
-    recorded_episodes = 0
-    while recorded_episodes < args.num_episodes and not events["stop_recording"]:
-        log_say(f"Recording episode {recorded_episodes}")
-
-        # Main recording loop
-        xlerobot_record_loop(
-            robot=robot,
-            events=events,
+        # Create dataset
+        dataset = LeRobotDataset.create(
+            repo_id=args.repo_id,
             fps=args.fps,
-            dataset=dataset,
-            keyboard=keyboard,
-            left_arm=left_arm,
-            right_arm=right_arm,
-            head_control=head_control,
-            control_time_s=args.episode_time_s,
-            single_task=args.task_description,
-            display_data=args.display_data,
-            teleop_action_processor=teleop_action_processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
+            features=dataset_features,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=4,
         )
 
-        # Reset environment (if not stopping or re-recording)
-        if not events["stop_recording"] and (
-            (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
-        ):
-            log_say("Resetting environment")
+        # Initialize keyboard listener and visualization
+        listener, events = init_keyboard_listener()
+        if args.display_data:
+            init_rerun(session_name="xlerobot_record")
+
+        # Initialize arm and head control
+        obs = robot.get_observation()
+        kin_left = SO101Kinematics()
+        kin_right = SO101Kinematics()
+        left_arm = SimpleTeleopArm(kin_left, LEFT_JOINT_MAP, obs, prefix="left")
+        right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right")
+        head_control = SimpleHeadControl(obs)
+
+        print("Starting recording loop...")
+        recorded_episodes = 0
+        while recorded_episodes < args.num_episodes and not events["stop_recording"]:
+            log_say(f"Recording episode {recorded_episodes}")
+
+            # Main recording loop
             xlerobot_record_loop(
                 robot=robot,
                 events=events,
                 fps=args.fps,
-                dataset=None,  # Don't record data during reset
+                dataset=dataset,
                 keyboard=keyboard,
                 left_arm=left_arm,
                 right_arm=right_arm,
                 head_control=head_control,
-                control_time_s=args.reset_time_s,
+                control_time_s=args.episode_time_s,
                 single_task=args.task_description,
                 display_data=args.display_data,
                 teleop_action_processor=teleop_action_processor,
@@ -477,22 +459,49 @@ def main():
                 robot_observation_processor=robot_observation_processor,
             )
 
-        if events["rerecord_episode"]:
-            log_say("Re-recording episode")
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
-            dataset.clear_episode_buffer()
-            continue
+            # Reset environment (if not stopping or re-recording)
+            if not events["stop_recording"] and (
+                (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
+            ):
+                log_say("Resetting environment")
+                xlerobot_record_loop(
+                    robot=robot,
+                    events=events,
+                    fps=args.fps,
+                    dataset=None,  # Don't record data during reset
+                    keyboard=keyboard,
+                    left_arm=left_arm,
+                    right_arm=right_arm,
+                    head_control=head_control,
+                    control_time_s=args.reset_time_s,
+                    single_task=args.task_description,
+                    display_data=args.display_data,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_action_processor=robot_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                )
 
-        # Save episode
-        dataset.save_episode()
-        recorded_episodes += 1
+            if events["rerecord_episode"]:
+                log_say("Re-recording episode")
+                events["rerecord_episode"] = False
+                events["exit_early"] = False
+                dataset.clear_episode_buffer()
+                continue
 
-    # Cleanup
-    log_say("Stopping recording")
-    robot.disconnect()
-    keyboard.disconnect()
-    listener.stop()
+            # Save episode
+            dataset.save_episode()
+            recorded_episodes += 1
+    finally:
+        # Cleanup
+        log_say("Stopping recording")
+        if dataset:
+            dataset.finalize()
+        if listener is not None:
+            listener.stop()
+        if keyboard.is_connected:
+            keyboard.disconnect()
+        if robot.is_connected:
+            robot.disconnect()
     # By default, don't push. Uncomment when needed
     # dataset.push_to_hub()
 

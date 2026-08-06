@@ -29,7 +29,10 @@ from lerobot.robots.xlerobot.xlerobot_client import XLerobotClient, XLerobotClie
 from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.so_leader import SO101LeaderConfig
-from lerobot.common.control_utils import init_keyboard_listener
+from lerobot.common.control_utils import (
+    init_keyboard_listener,
+    sanity_check_dataset_robot_compatibility,
+)
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
@@ -172,6 +175,17 @@ def main():
     parser.add_argument("--reset_time_s", type=int, default=RESET_TIME_SEC, help="Reset time between episodes")
     parser.add_argument("--task_description", type=str, default=TASK_DESCRIPTION, help="Task description")
     parser.add_argument("--repo_id", type=str, required=True, help="HuggingFace dataset repository ID")
+    parser.add_argument(
+        "--root",
+        type=str,
+        default=None,
+        help="Local dataset root directory (used with --resume).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume recording into an existing dataset.",
+    )
     parser.add_argument("--display_data", action="store_true", help="Display data visualization")
     parser.add_argument("--verbose", action="store_true", help="Show detailed logs")
     args = parser.parse_args()
@@ -202,39 +216,60 @@ def main():
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
 
-    robot.connect()
-    leader.connect()
-    keyboard.connect()
+    dataset = None
+    listener = None
 
-    # Create a fresh dataset writer. Each episode is accumulated frame by frame and
-    # committed with dataset.save_episode() below.
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        fps=args.fps,
-        features=dataset_features,
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
-
-    # This listener is separate from KeyboardTeleop. It is only used to control
-    # episode flow: finish early, re-record, or stop the whole recording session.
-    listener, events = init_keyboard_listener()
-    if args.display_data:
-        init_rerun(session_name="xlerobot_remote_bi_so101_record")
-
-    if not robot.is_connected or not leader.is_connected or not keyboard.is_connected:
-        raise ValueError("Robot, bi leader, or keyboard is not connected.")
-
-    print("Starting recording loop...")
-    print("Base keys: i/k/j/l move, u/o rotate, n/m speed +/-, q quit")
-    print("Head keys: </> motor_1, ,/. motor_2")
-    print("Listener keys: -> end episode, <- re-record episode, Esc stop recording")
-
-    recorded_episodes = 0
     try:
+        robot.connect()
+        leader.connect()
+        keyboard.connect()
+
+        if not robot.is_connected or not leader.is_connected or not keyboard.is_connected:
+            raise ValueError("Robot, bi leader, or keyboard is not connected.")
+
+        if args.resume:
+            # Resume recording into an existing dataset.
+            dataset = LeRobotDataset(
+                repo_id=None,
+                root=args.root,
+            )
+            if hasattr(robot, "cameras") and len(robot.cameras) > 0:
+                dataset.start_image_writer(
+                    num_processes=10,
+                    num_threads=5 * len(robot.cameras),
+                )
+            sanity_check_dataset_robot_compatibility(
+                dataset, robot, args.fps, dataset_features
+            )
+            print(f"续录模式: 已有 {dataset.num_episodes} 个 episode，本次将追加 {args.num_episodes} 个。")
+        else:
+            # Create a fresh dataset writer. Each episode is accumulated frame by frame and
+            # committed with dataset.save_episode() below.
+            dataset = LeRobotDataset.create(
+                repo_id=args.repo_id,
+                fps=args.fps,
+                features=dataset_features,
+                robot_type=robot.name,
+                use_videos=True,
+                image_writer_threads=4,
+            )
+            print(f"新建数据集模式: 本次将录制 {args.num_episodes} 个 episode。")
+
+        # This listener is separate from KeyboardTeleop. It is only used to control
+        # episode flow: finish early, re-record, or stop the whole recording session.
+        listener, events = init_keyboard_listener()
+        if args.display_data:
+            init_rerun(session_name="xlerobot_remote_bi_so101_record")
+
+        print("开始采集数据...")
+        print("底盘控制: i/k/j/l 移动, u/o 旋转, n/m 加减速, q 退出")
+        print("头部控制: </> head_motor_1, ,/. head_motor_2")
+        print("流程控制: -> 结束当前episode, <- 重录当前episode, Esc 停止采集")
+
+        recorded_episodes = 0
         while recorded_episodes < args.num_episodes and not events["stop_recording"]:
             log_say(f"Recording episode {recorded_episodes}")
+            print(f"准备开始第 {recorded_episodes + 1}/{args.num_episodes} 轮")
             # Main recording phase: send teleop actions to the robot and write frames to the dataset.
             record_loop(
                 robot=robot,
@@ -255,6 +290,7 @@ def main():
                 (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
             ):
                 log_say("Resetting environment")
+                print("进入重置阶段，请复位环境。")
                 # Reset phase: operator can move the scene/robot back to a start state
                 # without writing reset motions into the dataset.
                 record_loop(
@@ -274,6 +310,7 @@ def main():
 
             if events["rerecord_episode"]:
                 log_say("Re-recording episode")
+                print("准备重录当前轮...")
                 # Drop all frames collected for the current episode and try again.
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
@@ -285,6 +322,7 @@ def main():
             recorded_episodes += 1
     finally:
         log_say("Stopping recording")
+        print("停止采集，断开连接...")
         # Disconnect in reverse order of usage and stop the optional keyboard listener.
         if listener is not None:
             listener.stop()
