@@ -155,18 +155,23 @@ def init_keyboard_listener():
     def on_press(key):
         try:
             if key == keyboard.Key.right:
-                print("Right arrow key pressed. Exiting loop...")
+                # Only report on a fresh press (flag was False) instead of on every
+                # auto-repeat event while the key is held down.
+                if not events["exit_early"]:
+                    print("→ 结束当前轮")
                 events["exit_early"] = True
             elif key == keyboard.Key.left:
-                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
+                if not events["rerecord_episode"]:
+                    print("← 重录当前轮")
                 events["rerecord_episode"] = True
                 events["exit_early"] = True
             elif key == keyboard.Key.esc:
-                print("Escape key pressed. Stopping data recording...")
+                if not events["stop_recording"]:
+                    print("Esc 停止采集")
                 events["stop_recording"] = True
                 events["exit_early"] = True
         except Exception as e:
-            print(f"Error handling key press: {e}")
+            print(f"处理按键时出错: {e}")
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()

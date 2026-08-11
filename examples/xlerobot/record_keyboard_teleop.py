@@ -38,6 +38,7 @@ import time
 import platform
 import numpy as np
 
+from lerobot.datasets import VideoEncodingManager, safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.model.SO101Robot import SO101Kinematics
@@ -241,6 +242,7 @@ def busy_wait(seconds):
             time.sleep(seconds)
 
 
+@safe_stop_image_writer
 def xlerobot_record_loop(
     robot,
     events,
@@ -437,43 +439,31 @@ def main():
         head_control = SimpleHeadControl(obs)
 
         print("Starting recording loop...")
-        recorded_episodes = 0
-        while recorded_episodes < args.num_episodes and not events["stop_recording"]:
-            log_say(f"Recording episode {recorded_episodes}")
+        # Same record-loop wrapping as the official `lerobot-record` script:
+        # VideoEncodingManager finalizes the dataset on normal exit, and on an
+        # exception it also deletes the temp images of the in-progress episode
+        # (cleanup_interrupted_episode) so no orphaned frames pile up.
+        with VideoEncodingManager(dataset):
+            recorded_episodes = 0
+            while recorded_episodes < args.num_episodes and not events["stop_recording"]:
+                # Clear any leftover flow-control flags so a press from the previous round
+                # can't make the new round end before it records a single frame.
+                events["exit_early"] = False
+                events["rerecord_episode"] = False
 
-            # Main recording loop
-            xlerobot_record_loop(
-                robot=robot,
-                events=events,
-                fps=args.fps,
-                dataset=dataset,
-                keyboard=keyboard,
-                left_arm=left_arm,
-                right_arm=right_arm,
-                head_control=head_control,
-                control_time_s=args.episode_time_s,
-                single_task=args.task_description,
-                display_data=args.display_data,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-            )
+                log_say(f"Recording episode {recorded_episodes}")
 
-            # Reset environment (if not stopping or re-recording)
-            if not events["stop_recording"] and (
-                (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
-            ):
-                log_say("Resetting environment")
+                # Main recording loop
                 xlerobot_record_loop(
                     robot=robot,
                     events=events,
                     fps=args.fps,
-                    dataset=None,  # Don't record data during reset
+                    dataset=dataset,
                     keyboard=keyboard,
                     left_arm=left_arm,
                     right_arm=right_arm,
                     head_control=head_control,
-                    control_time_s=args.reset_time_s,
+                    control_time_s=args.episode_time_s,
                     single_task=args.task_description,
                     display_data=args.display_data,
                     teleop_action_processor=teleop_action_processor,
@@ -481,16 +471,47 @@ def main():
                     robot_observation_processor=robot_observation_processor,
                 )
 
-            if events["rerecord_episode"]:
-                log_say("Re-recording episode")
-                events["rerecord_episode"] = False
-                events["exit_early"] = False
-                dataset.clear_episode_buffer()
-                continue
+                if events["stop_recording"]:
+                    break
 
-            # Save episode
-            dataset.save_episode()
-            recorded_episodes += 1
+                if events["rerecord_episode"]:
+                    log_say("Re-recording episode")
+                    events["rerecord_episode"] = False
+                    events["exit_early"] = False
+                    dataset.clear_episode_buffer()
+                    continue
+
+                # Reset environment between episodes (skipped when --reset_time_s 0)
+                if args.reset_time_s > 0 and (
+                    (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
+                ):
+                    log_say("Resetting environment")
+                    xlerobot_record_loop(
+                        robot=robot,
+                        events=events,
+                        fps=args.fps,
+                        dataset=None,  # Don't record data during reset
+                        keyboard=keyboard,
+                        left_arm=left_arm,
+                        right_arm=right_arm,
+                        head_control=head_control,
+                        control_time_s=args.reset_time_s,
+                        single_task=args.task_description,
+                        display_data=args.display_data,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                    )
+
+                if not dataset.has_pending_frames():
+                    # The round ended before any frame was recorded (e.g. a flow-control
+                    # key was still held when it started). Skip saving instead of crashing.
+                    print(f"第 {recorded_episodes + 1} 轮未采集到有效帧，已跳过本轮。")
+                    continue
+
+                # Save episode
+                dataset.save_episode()
+                recorded_episodes += 1
     finally:
         # Cleanup
         log_say("Stopping recording")

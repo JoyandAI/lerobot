@@ -23,6 +23,7 @@ import time
 import numpy as np
 
 from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
+from lerobot.datasets import VideoEncodingManager, safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.processor import make_default_processors
 from lerobot.robots.xlerobot.xlerobot_client import XLerobotClient, XLerobotClientConfig
@@ -43,6 +44,8 @@ HEAD_STEP_SIZE = 5.0
 NUM_EPISODES = 50
 FPS = 30
 EPISODE_TIME_SEC = 300
+# 两轮之间默认进入复位阶段（约 10 秒），方便把机械臂/场景摆回起始位置；
+# 复位阶段中按 → 可提前跳过，直接进入下一轮采集。用 --reset_time_s 0 可完全关闭。
 RESET_TIME_SEC = 10
 TASK_DESCRIPTION = "My task description"
 
@@ -78,6 +81,7 @@ def busy_wait(seconds: float) -> None:
         time.sleep(seconds)
 
 
+@safe_stop_image_writer
 def record_loop(
     robot,
     leader,
@@ -165,14 +169,19 @@ def record_loop(
 def main():
     parser = argparse.ArgumentParser(description="Record datasets for XLerobot using bi-so101 leader + keyboard")
     parser.add_argument("--robot_id", type=str, default="joyandai_xlerobot", help="Robot ID")
-    parser.add_argument("--remote_ip", type=str, default="192.168.200.104", help="Remote robot IP address")
+    parser.add_argument("--remote_ip", type=str, default="192.168.201.186", help="Remote robot IP address")
     parser.add_argument("--leader_id", type=str, default="my_bi_so101_leader", help="Bi leader ID")
-    parser.add_argument("--left_leader_port", type=str, default="COM8", help="Left leader serial port")
-    parser.add_argument("--right_leader_port", type=str, default="COM9", help="Right leader serial port")
+    parser.add_argument("--left_leader_port", type=str, default="COM6", help="Left leader serial port")
+    parser.add_argument("--right_leader_port", type=str, default="COM18", help="Right leader serial port")
     parser.add_argument("--num_episodes", type=int, default=NUM_EPISODES, help="Number of episodes to record")
     parser.add_argument("--fps", type=int, default=FPS, help="Recording frame rate")
     parser.add_argument("--episode_time_s", type=int, default=EPISODE_TIME_SEC, help="Recording time per episode")
-    parser.add_argument("--reset_time_s", type=int, default=RESET_TIME_SEC, help="Reset time between episodes")
+    parser.add_argument(
+        "--reset_time_s",
+        type=int,
+        default=RESET_TIME_SEC,
+        help="两轮之间复位环境的时间（秒）；0 表示结束一轮后直接进入下一轮",
+    )
     parser.add_argument("--task_description", type=str, default=TASK_DESCRIPTION, help="Task description")
     parser.add_argument("--repo_id", type=str, required=True, help="HuggingFace dataset repository ID")
     parser.add_argument(
@@ -228,16 +237,16 @@ def main():
             raise ValueError("Robot, bi leader, or keyboard is not connected.")
 
         if args.resume:
-            # Resume recording into an existing dataset.
-            dataset = LeRobotDataset(
-                repo_id=None,
+            # Resume recording into an existing dataset. `resume()` returns a
+            # write-mode dataset (unlike the bare constructor) and optionally
+            # starts the async image writer for the cameras.
+            n_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
+            dataset = LeRobotDataset.resume(
+                repo_id=args.repo_id,
                 root=args.root,
+                image_writer_processes=10 if n_cameras > 0 else 0,
+                image_writer_threads=5 * n_cameras if n_cameras > 0 else 0,
             )
-            if hasattr(robot, "cameras") and len(robot.cameras) > 0:
-                dataset.start_image_writer(
-                    num_processes=10,
-                    num_threads=5 * len(robot.cameras),
-                )
             sanity_check_dataset_robot_compatibility(
                 dataset, robot, args.fps, dataset_features
             )
@@ -266,41 +275,29 @@ def main():
         print("头部控制: </> head_motor_1, ,/. head_motor_2")
         print("流程控制: -> 结束当前episode, <- 重录当前episode, Esc 停止采集")
 
-        recorded_episodes = 0
-        while recorded_episodes < args.num_episodes and not events["stop_recording"]:
-            log_say(f"Recording episode {recorded_episodes}")
-            print(f"准备开始第 {recorded_episodes + 1}/{args.num_episodes} 轮")
-            # Main recording phase: send teleop actions to the robot and write frames to the dataset.
-            record_loop(
-                robot=robot,
-                leader=leader,
-                keyboard=keyboard,
-                events=events,
-                fps=args.fps,
-                control_time_s=args.episode_time_s,
-                dataset=dataset,
-                single_task=args.task_description,
-                display_data=args.display_data,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-            )
+        # Same record-loop wrapping as the official `lerobot-record` script:
+        # VideoEncodingManager finalizes the dataset on normal exit, and on an
+        # exception it also deletes the temp images of the in-progress episode
+        # (cleanup_interrupted_episode) so no orphaned frames pile up.
+        with VideoEncodingManager(dataset):
+            recorded_episodes = 0
+            while recorded_episodes < args.num_episodes and not events["stop_recording"]:
+                # Clear any leftover flow-control flags so a press from the previous round
+                # can't make the new round end before it records a single frame.
+                events["exit_early"] = False
+                events["rerecord_episode"] = False
 
-            if not events["stop_recording"] and (
-                (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
-            ):
-                log_say("Resetting environment")
-                print("进入重置阶段，请复位环境。")
-                # Reset phase: operator can move the scene/robot back to a start state
-                # without writing reset motions into the dataset.
+                log_say(f"Recording episode {recorded_episodes}")
+                print(f"准备开始第 {recorded_episodes + 1}/{args.num_episodes} 轮")
+                # Main recording phase: send teleop actions to the robot and write frames to the dataset.
                 record_loop(
                     robot=robot,
                     leader=leader,
                     keyboard=keyboard,
                     events=events,
                     fps=args.fps,
-                    control_time_s=args.reset_time_s,
-                    dataset=None,
+                    control_time_s=args.episode_time_s,
+                    dataset=dataset,
                     single_task=args.task_description,
                     display_data=args.display_data,
                     teleop_action_processor=teleop_action_processor,
@@ -308,21 +305,60 @@ def main():
                     robot_observation_processor=robot_observation_processor,
                 )
 
-            if events["rerecord_episode"]:
-                log_say("Re-recording episode")
-                print("准备重录当前轮...")
-                # Drop all frames collected for the current episode and try again.
-                events["rerecord_episode"] = False
-                events["exit_early"] = False
-                dataset.clear_episode_buffer()
-                continue
+                if events["stop_recording"]:
+                    break
 
-            # Persist the buffered frames as one complete episode.
-            dataset.save_episode()
-            recorded_episodes += 1
+                if events["rerecord_episode"]:
+                    log_say("Re-recording episode")
+                    print("准备重录当前轮...")
+                    # Drop all frames collected for the current episode and try again.
+                    events["rerecord_episode"] = False
+                    events["exit_early"] = False
+                    dataset.clear_episode_buffer()
+                    continue
+
+                # Optional reset phase between episodes (enabled via --reset_time_s > 0).
+                # During reset the teleop motions still go to the robot but are not written
+                # to the dataset, so the scene can be moved back to a start state.
+                if args.reset_time_s > 0 and recorded_episodes < args.num_episodes - 1:
+                    log_say("Resetting environment")
+                    print("进入重置阶段，请复位环境。")
+                    record_loop(
+                        robot=robot,
+                        leader=leader,
+                        keyboard=keyboard,
+                        events=events,
+                        fps=args.fps,
+                        control_time_s=args.reset_time_s,
+                        dataset=None,
+                        single_task=args.task_description,
+                        display_data=args.display_data,
+                        teleop_action_processor=teleop_action_processor,
+                        robot_action_processor=robot_action_processor,
+                        robot_observation_processor=robot_observation_processor,
+                    )
+
+                if not dataset.has_pending_frames():
+                    # The round ended before any frame was recorded (e.g. a flow-control
+                    # key was still held when it started). Skip saving instead of crashing.
+                    print(f"第 {recorded_episodes + 1} 轮未采集到有效帧，已跳过本轮。")
+                    continue
+
+                # Persist the buffered frames as one complete episode.
+                dataset.save_episode()
+                recorded_episodes += 1
     finally:
         log_say("Stopping recording")
         print("停止采集，断开连接...")
+        # Same shutdown behavior as the official `lerobot-record` script:
+        # flush metadata and close writers. Cleaning up the temp images of an
+        # interrupted episode is handled by `VideoEncodingManager` above
+        # (deleted only when the run aborted with an exception).
+        if dataset is not None:
+            try:
+                dataset.finalize()
+            except Exception as exc:
+                print(f"数据集收尾出错（不影响已保存的 episode）: {exc}")
         # Disconnect in reverse order of usage and stop the optional keyboard listener.
         if listener is not None:
             listener.stop()

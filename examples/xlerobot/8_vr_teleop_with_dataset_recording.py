@@ -23,6 +23,7 @@ from lerobot.teleoperators.xlerobot_vr.vr_monitor import VRMonitor
 from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.model.SO101Robot import SO101Kinematics
+from lerobot.datasets import VideoEncodingManager
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import hw_to_dataset_features, build_dataset_frame
@@ -513,17 +514,13 @@ def init_dataset(robot, resume=True):
 
     if resume and os.path.exists(dataset_root):
         print(f"[RESUME] Loading the dataset from a local path.: {dataset_root}")
-        dataset = LeRobotDataset(
+        n_cameras = len(robot._cameras_ft) if hasattr(robot, "_cameras_ft") else 0
+        dataset = LeRobotDataset.resume(
             repo_id=None,
             root=dataset_root,
+            image_writer_processes=10 if n_cameras > 0 else 0,
+            image_writer_threads=5 * n_cameras if n_cameras > 0 else 0,
         )
-        
-        if hasattr(robot, "_cameras_ft") and len(robot._cameras_ft) > 0:
-            dataset.start_image_writer(
-                num_processes=10, 
-                num_threads=5 * len(robot._cameras_ft),
-            )
-        
         next_episode = dataset.num_episodes
         print(f"[RESUME]  {next_episode}  episodes.Next: {next_episode}")
         
@@ -572,7 +569,6 @@ def saving_dataset_worker(dataset, frame_queue, shutdown_event, saving_in_progre
             if rerecord_request_event.is_set():
                 print(f"[DATASET] 🎬 Re-recording episode {episode}")
                 saving_in_progress_event.set()
-                dataset.image_writer.wait_until_done()
                 dataset.clear_episode_buffer(delete_images=True)
                 with frame_queue.mutex:
                     frame_queue.queue.clear()
@@ -586,7 +582,6 @@ def saving_dataset_worker(dataset, frame_queue, shutdown_event, saving_in_progre
                 saving_in_progress_event.set()
                 if frame_nr > 0:
                     dataset.save_episode()
-                    dataset.image_writer.wait_until_done()
                     print(f"[DATASET] Episode {episode} saved by stop")
                     episode += 1
                 else:
@@ -610,15 +605,15 @@ def saving_dataset_worker(dataset, frame_queue, shutdown_event, saving_in_progre
                 print(f"[DATASET] Episode {episode} full, saving...")
                 saving_in_progress_event.set()
                 dataset.save_episode()
-                dataset.image_writer.wait_until_done()
                 frame_nr = 0
                 episode += 1
                 saving_in_progress_event.clear()
 
     finally:
-        if dataset:
-            dataset.image_writer.wait_until_done()
-            # dataset.push_to_hub()
+        # No manual image-writer wait here: save_episode() / clear_episode_buffer()
+        # / finalize() all wait for the image writer internally, and
+        # VideoEncodingManager in main() handles interrupted-episode cleanup.
+        pass
 
 @safe_stop_image_writer
 def record_loop(
@@ -882,37 +877,51 @@ def main():
         if resume_flag and dataset.num_episodes > 0:
             print(f"[RESUME] Resuming from episode {dataset.num_episodes}, waiting VR stability...")
 
-        thread_args = (dataset, frame_queue, shutdown_event, saving_in_progress_event,
-               rerecord_request_event, stop_episode_request_event, next_episode)
-        dataset_saving_thread = threading.Thread(target=saving_dataset_worker, args=thread_args, daemon=False)
-        dataset_saving_thread.start()
-        record_loop(
-            robot,
-            vr_monitor,
-            dataset,
-            frame_queue,
-            shutdown_event,
-            saving_in_progress_event,
-            stop_episode_request_event,
-            rerecord_request_event,
-            left_arm,
-            right_arm,
-            head_control,
-            base_control,
-            reset_position_event,
-            stop_recording_event,
-            rerecord_episode_event,
-            exit_early_event,
-            VR_STABLE_TIME,
-            COUNTDOWN_SECONDS,
-        )
+        # Wrap the whole recording session with the official VideoEncodingManager:
+        # it finalizes the dataset on normal exit, and on an exception it also
+        # deletes the temp images of the in-progress episode
+        # (cleanup_interrupted_episode) so no orphaned frames pile up.
+        with VideoEncodingManager(dataset):
+            thread_args = (dataset, frame_queue, shutdown_event, saving_in_progress_event,
+                   rerecord_request_event, stop_episode_request_event, next_episode)
+            dataset_saving_thread = threading.Thread(target=saving_dataset_worker, args=thread_args, daemon=False)
+            dataset_saving_thread.start()
+            try:
+                record_loop(
+                    robot,
+                    vr_monitor,
+                    dataset,
+                    frame_queue,
+                    shutdown_event,
+                    saving_in_progress_event,
+                    stop_episode_request_event,
+                    rerecord_request_event,
+                    left_arm,
+                    right_arm,
+                    head_control,
+                    base_control,
+                    reset_position_event,
+                    stop_recording_event,
+                    rerecord_episode_event,
+                    exit_early_event,
+                    VR_STABLE_TIME,
+                    COUNTDOWN_SECONDS,
+                )
+            finally:
+                # Stop the worker thread before the context manager cleans up the
+                # in-progress episode's temp images, to avoid a race.
+                shutdown_event.set()
+                if dataset_saving_thread:
+                    dataset_saving_thread.join()
     finally:
-        # Cleanup
-        shutdown_event.set()
-        if dataset_saving_thread:
-            dataset_saving_thread.join()
+        # Same shutdown behavior as the official `lerobot-record` script: flush
+        # metadata and close writers. Temp-image cleanup of an interrupted episode
+        # is handled by VideoEncodingManager above (deleted only on exception).
         if dataset:
-            dataset.finalize()
+            try:
+                dataset.finalize()
+            except Exception as exc:
+                print(f"数据集收尾出错（不影响已保存的 episode）: {exc}")
 
 
 def parse_args():
