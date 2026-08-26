@@ -1,113 +1,119 @@
-# XLerobot Keyboard Controls
+# XLerobot 键盘控制按键说明
 
 ![XLerobot keyboard controls](../assets/xlerobot_keyboard_controls.png)
 
-This page documents the active keyboard controls after removing the recording aliases for `N`, `R`, and `Q`.
-Those keys are kept for robot control only. Recording flow now uses only arrow keys and `Esc`.
+上图为英文键盘按键图，颜色和下方表格一一对应。当前版本已经去掉 `N`、`R`、`Q` 的录制流程快捷键：
+
+- `N` 保留为速度加速键。
+- `R` 保留为左臂手腕正向旋转键。
+- `Q` 保留为左臂肩部负向旋转键。
+- 录制流程只使用 `Right Arrow`、`Left Arrow` 和 `Esc`。
 
 ## `record_keyboard_teleop.py`
 
-### Left Arm
+### 左臂控制
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `Q` / `E` | Shoulder pan `-` / `+` |
-| `W` / `S` | End-effector X `+` / `-` |
-| `A` / `D` | End-effector Y `+` / `-` |
-| `Z` / `X` | Pitch `+` / `-` |
-| `R` / `F` | Wrist roll `+` / `-` |
-| `T` / `G` | Gripper `+` / `-` |
-| `C` | Reset left arm |
+| `Q` / `E` | 肩部水平旋转 `-` / `+` |
+| `W` / `S` | 末端 X 坐标 `+` / `-` |
+| `A` / `D` | 末端 Y 坐标 `+` / `-` |
+| `Z` / `X` | 俯仰 `+` / `-` |
+| `R` / `F` | 手腕旋转 `+` / `-` |
+| `T` / `G` | 夹爪 `+` / `-` |
+| `C` | 左臂复位 |
 
-### Right Arm
+### 右臂控制
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `7` / `9` | Shoulder pan `-` / `+` |
-| `8` / `2` | End-effector X `+` / `-` |
-| `4` / `6` | End-effector Y `+` / `-` |
-| `1` / `3` | Pitch `+` / `-` |
-| `*` / `/` | Wrist roll `-` / `+` |
-| `+` / `-` | Gripper `+` / `-` |
-| `0` | Reset right arm |
+| `7` / `9` | 肩部水平旋转 `-` / `+` |
+| `8` / `2` | 末端 X 坐标 `+` / `-` |
+| `4` / `6` | 末端 Y 坐标 `+` / `-` |
+| `1` / `3` | 俯仰 `+` / `-` |
+| `*` / `/` | 手腕旋转 `-` / `+` |
+| `+` / `-` | 夹爪 `+` / `-` |
+| `0` | 右臂复位 |
 
-### Head Pan-Tilt
+### 头部云台
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `<` / `>` | Head motor 1 `+` / `-` |
-| `,` / `.` | Head motor 2 `+` / `-` |
-| `?` | Reset head |
+| `<` / `>` | 头部舵机 1 `+` / `-` |
+| `,` / `.` | 头部舵机 2 `+` / `-` |
+| `?` | 头部云台复位 |
 
-`<`, `>`, and `?` normally require `Shift` on an English keyboard.
+`<`、`>` 和 `?` 在英文键盘上通常需要配合 `Shift` 输入。
 
-### Mobile Base
+### 移动底盘
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `I` / `K` | Forward / backward |
-| `J` / `L` | Move left / move right |
-| `U` / `O` | Rotate left / rotate right |
+| `I` / `K` | 前进 / 后退 |
+| `J` / `L` | 左移 / 右移 |
+| `U` / `O` | 左转 / 右转 |
 
-### Speed
+### 速度控制
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `N` | Increase speed |
-| `M` | Decrease speed |
+| `N` | 加速 |
+| `M` | 减速 |
 
-### Recording Flow
+### 录制流程
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `Right Arrow` | Finish current episode early |
-| `Left Arrow` | Re-record current episode |
-| `Esc` | Stop the full recording task |
+| `Right Arrow` | 提前结束当前 episode |
+| `Left Arrow` | 重录当前 episode |
+| `Esc` | 停止整个录制任务 |
 
-Removed recording aliases: `N`, `R`, and `Q`.
+已移除的录制快捷键：`N`、`R`、`Q`。
+
+> 说明：代码里仍然保留了 `Y` / `Shift+Y` 到 `triangle` 的映射，但当前 `handle_keys()` 没有执行 `triangle` 动作，所以图片中将 `Y` 标为未生效。
 
 ## `record_remote_bi_so101_leader_keyboard.py`
 
-### Dual Arms
+### 双臂控制
 
-| Input | Action |
+| 输入设备 | 功能 |
 | --- | --- |
-| Left SO-101 leader arm | Teleoperate the left follower arm joints |
-| Right SO-101 leader arm | Teleoperate the right follower arm joints |
+| 左侧 SO-101 Leader | 示教左机械臂关节 |
+| 右侧 SO-101 Leader | 示教右机械臂关节 |
 
-This script does not use keyboard keys for dual-arm control.
+该脚本不使用键盘控制双臂。
 
-### Head Pan-Tilt
+### 头部云台
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `<` / `>` | Head motor 1 `+5 deg` / `-5 deg` |
-| `,` / `.` | Head motor 2 `+5 deg` / `-5 deg` |
+| `<` / `>` | 头部舵机 1 `+5 deg` / `-5 deg` |
+| `,` / `.` | 头部舵机 2 `+5 deg` / `-5 deg` |
 
-`<` and `>` normally require `Shift` on an English keyboard. This script has no head reset key.
+`<` 和 `>` 在英文键盘上通常需要配合 `Shift` 输入。该脚本没有头部云台复位键。
 
-### Mobile Base
+### 移动底盘
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `I` / `K` | Forward / backward |
-| `J` / `L` | Move left / move right |
-| `U` / `O` | Rotate left / rotate right |
+| `I` / `K` | 前进 / 后退 |
+| `J` / `L` | 左移 / 右移 |
+| `U` / `O` | 左转 / 右转 |
 
-### Speed And Quit
+### 速度与退出
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `N` | Increase speed |
-| `M` | Decrease speed |
-| `B` | Send robot quit signal and stop recording |
+| `N` | 加速 |
+| `M` | 减速 |
+| `B` | 发送机器人 quit 信号，并停止录制 |
 
-### Recording Flow
+### 录制流程
 
-| Key | Action |
+| 按键 | 功能 |
 | --- | --- |
-| `Right Arrow` | Finish current episode early |
-| `Left Arrow` | Re-record current episode |
-| `Esc` | Stop the full recording task |
+| `Right Arrow` | 提前结束当前 episode |
+| `Left Arrow` | 重录当前 episode |
+| `Esc` | 停止整个录制任务 |
 
-Removed recording aliases: `N`, `R`, and `Q`.
+已移除的录制快捷键：`N`、`R`、`Q`。
