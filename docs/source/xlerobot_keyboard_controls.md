@@ -74,6 +74,8 @@
 
 ## `record_remote_bi_so101_leader_keyboard.py`
 
+![XLerobot remote dual-arm keyboard controls](../assets/xlerobot_remote_bi_so101_keyboard_controls.png)
+
 ### 双臂控制
 
 | 输入设备 | 功能 |
@@ -85,12 +87,11 @@
 
 ### 头部云台
 
-| 按键 | 功能 |
+| 输入 | 功能 |
 | --- | --- |
-| `<` / `>` | 头部舵机 1 `+5 deg` / `-5 deg` |
-| `,` / `.` | 头部舵机 2 `+5 deg` / `-5 deg` |
+| 无键盘控制 | 当前脚本不通过键盘控制头部云台 |
 
-`<` 和 `>` 在英文键盘上通常需要配合 `Shift` 输入。该脚本没有头部云台复位键。
+该脚本会把未由 Leader 或键盘提供的 `.pos` 动作补成当前观测位置，因此头部云台默认保持当前位置。
 
 ### 移动底盘
 
