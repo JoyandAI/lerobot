@@ -126,8 +126,9 @@ def init_keyboard_listener():
     Initializes a non-blocking keyboard listener for real-time user interaction.
 
     This function sets up a listener for specific keys (right arrow, left arrow, escape) to control
-    the program flow during execution, such as stopping recording or exiting loops. It gracefully
-    handles headless environments where keyboard listening is not possible.
+    the program flow during execution, such as stopping recording or exiting loops. Letter keys are
+    intentionally not handled here so teleoperation keys like n/r/q can remain dedicated to robot
+    control. It gracefully handles headless environments where keyboard listening is not possible.
 
     Returns:
         A tuple containing:
