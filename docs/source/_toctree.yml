@@ -93,6 +93,8 @@
     title: Unitree G1
   - local: earthrover_mini_plus
     title: Earth Rover Mini
+  - local: xlerobot_keyboard_controls
+    title: XLerobot Keyboard Controls
   title: "Robots"
 - sections:
   - local: phone_teleop

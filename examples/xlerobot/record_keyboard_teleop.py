@@ -433,6 +433,10 @@ def main():
     head_control = SimpleHeadControl(obs)
 
     print("Starting recording loop...")
+    print("Arm keys: left=q/e w/s a/d z/x r/f t/g c, right=7/9 8/2 4/6 1/3 */ +-/0")
+    print("Head keys: </> head_motor_1, ,/. head_motor_2, ? reset head")
+    print("Base keys: i/k/j/l move, u/o rotate, n/m speed +/-")
+    print("Listener keys: -> end episode, <- re-record episode, Esc stop recording")
     recorded_episodes = 0
     while recorded_episodes < args.num_episodes and not events["stop_recording"]:
         log_say(f"Recording episode {recorded_episodes}")
