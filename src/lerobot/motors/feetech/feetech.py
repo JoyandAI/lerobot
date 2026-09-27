@@ -298,6 +298,20 @@ class FeetechMotorsBus(MotorsBus):
         return calibration
 
     def write_calibration(self, calibration_dict: dict[str, MotorCalibration], cache: bool = True) -> None:
+        # Validate the whole batch before writing any calibration register.
+        for motor, calibration in calibration_dict.items():
+            model = self._get_motor_model(motor)
+            max_position = self.model_resolution_table[model] - 1
+            if not 0 <= calibration.range_min < calibration.range_max <= max_position:
+                raise ValueError(
+                    f"Invalid calibration range for {motor}: "
+                    f"[{calibration.range_min}, {calibration.range_max}]; "
+                    f"required 0 <= min < max <= {max_position}. No calibration batch written."
+                )
+            if self.protocol_version == 0:
+                sign_bit = self.model_encoding_table.get(model, {}).get("Homing_Offset")
+                if sign_bit is None or abs(calibration.homing_offset) > (1 << sign_bit) - 1:
+                    raise ValueError(f"Invalid Homing_Offset for {motor}: {calibration.homing_offset}")
         for motor, calibration in calibration_dict.items():
             if self.protocol_version == 0:
                 self.write("Homing_Offset", motor, calibration.homing_offset)
@@ -308,38 +322,81 @@ class FeetechMotorsBus(MotorsBus):
             self.calibration = calibration_dict
 
     def _get_half_turn_homings(self, positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
-        """
-        On Feetech Motors:
-        Present_Position = Actual_Position - Homing_Offset
-        """
+        """Compute exact offsets; never silently change the position by a full turn."""
         half_turn_homings = {}
+        errors = []
         for motor, pos in positions.items():
             model = self._get_motor_model(motor)
-            max_res = self.model_resolution_table[model] - 1
-            
-            # calculate target offset
-            target_offset = pos - int(max_res / 2)
-            # print(f"target_offset: {target_offset}")
-            
-            # get Homing_Offset bits from encoding table
+            midpoint = (self.model_resolution_table[model] - 1) // 2
             encoding_table = self.model_encoding_table.get(model, {})
-            homing_offset_bits = encoding_table.get("Homing_Offset", 11)  # 默认11位
-            
-            # calculate adjustment value: 2^(bits + 1)
-            adjustment_value = 1 << (homing_offset_bits + 1)
-            max_offset = (1 << homing_offset_bits) - 1  # 2^bits - 1
-            
-            # ensure offset is in reasonable range
-            # if out of range, adjust by adjustment_value
-            while target_offset > max_offset:
-                target_offset -= adjustment_value
-            while target_offset < -max_offset:
-                target_offset += adjustment_value
-            # print(f"target_offset adjusted: {target_offset}")
-            
+            sign_bit = encoding_table.get("Homing_Offset")
+            if sign_bit is None:
+                raise ValueError(f"No Homing_Offset encoding defined for {model}; aborting calibration.")
+            max_offset = (1 << sign_bit) - 1
+            target_offset = int(pos) - midpoint
+            logger.warning(
+                "HOMING_DIAG motor=%s model=%s position_after_reset=%s "
+                "midpoint=%s required_offset=%s allowed_offset=[%s,%s]",
+                motor, model, pos, midpoint, target_offset, -max_offset, max_offset,
+            )
+            if not -max_offset <= target_offset <= max_offset:
+                errors.append(
+                    f"{motor}: position_after_reset={pos}, required_offset={target_offset}, "
+                    f"allowed=[{-max_offset}, {max_offset}]. "
+                    "A full-turn wrap would not preserve the requested midpoint."
+                )
             half_turn_homings[motor] = target_offset
-
+        if errors:
+            raise ValueError(
+                "Homing aborted before writing new offsets. The calibration reset has already "
+                "changed motor settings; do not teleoperate until calibration succeeds. "
+                "Keep the arm supported and share all HOMING_DIAG lines. " + "; ".join(errors)
+            )
         return half_turn_homings
+
+    def set_half_turn_homings(self, motors: NameOrID | list[NameOrID] | None = None) -> dict[NameOrID, Value]:
+        # Match upstream STS3215 angle-feedback configuration, before homing.
+        # Calibration can run before configure_motors(), so do it here explicitly.
+        selected = self._get_motors_list(motors)
+        self.disable_torque(selected)
+        for motor in selected:
+            model = self._get_motor_model(motor)
+            if model != "sts3215":
+                continue
+            if "Phase" not in self.model_ctrl_table[model]:
+                raise ValueError(
+                    "STS3215 table has no Phase register entry. Stop and provide feetech/tables.py; "
+                    "no numeric-address fallback will be attempted."
+                )
+            phase = self.read("Phase", motor, normalize=False)
+            target_phase = phase & ~0x10
+            if phase != target_phase:
+                self.write("Phase", motor, target_phase, normalize=False)
+            phase_after = self.read("Phase", motor, normalize=False)
+            logger.warning("PHASE_DIAG motor=%s before=%s after=%s expected=%s",
+                           motor, phase, phase_after, target_phase)
+            if phase_after != target_phase:
+                raise ValueError(f"Phase readback mismatch for {motor}: {phase_after} != {target_phase}")
+        offsets = super().set_half_turn_homings(selected)
+        positions = self.sync_read("Present_Position", list(offsets), normalize=False)
+        errors = []
+        for motor, offset in offsets.items():
+            actual_offset = self.read("Homing_Offset", motor, normalize=False)
+            midpoint = (self.model_resolution_table[self._get_motor_model(motor)] - 1) // 2
+            pos = positions[motor]
+            logger.warning(
+                "HOMING_VERIFY motor=%s requested_offset=%s read_offset=%s position=%s expected=%s",
+                motor, offset, actual_offset, pos, midpoint,
+            )
+            # Allow small motion while the operator supports the unpowered joint.
+            if actual_offset != offset or abs(pos - midpoint) > 50:
+                errors.append(f"{motor}: offset={actual_offset} (expected {offset}), position={pos} (expected ~{midpoint})")
+        if errors:
+            raise ValueError(
+                "Midpoint verification failed; range recording has NOT started. "
+                "Hold joints steady and share HOMING_DIAG/HOMING_VERIFY lines. " + "; ".join(errors)
+            )
+        return offsets
 
     def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
